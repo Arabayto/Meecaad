@@ -1,0 +1,10 @@
+{
+  "name": "Meecaad",
+  "short_name": "Meecaad",
+  "description": "Restaurant & Cafe, Fuel Station and Store management",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F9F7",
+  "theme_color": "#0B8F08",
+  "icons": [{ "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

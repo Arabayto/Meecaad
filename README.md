@@ -108,13 +108,17 @@ Starts `wrangler pages dev` on a fresh local D1 and walks through the real workf
 
 ## Deploy to Cloudflare (first time)
 
+**No computer?** Follow [docs/SETUP_FROM_PHONE.md](docs/SETUP_FROM_PHONE.md). It does everything in the Cloudflare and GitHub websites and includes a 10-minute test.
+
+The app creates its database tables itself on the first request (`server/migrate.ts`). It records them in wrangler's `d1_migrations` table, so step 2 below is optional.
+
 This is a new, separate Pages project and D1 database; it does not touch the Al-Hayat deployment or its PostgreSQL data.
 
 1. Create the database and copy the printed `database_id` into `wrangler.toml`:
    ```bash
    npx wrangler d1 create meecaad
    ```
-2. Apply the schema:
+2. (Optional) Apply the schema ahead of time:
    ```bash
    npm run db:migrate:remote
    ```
@@ -131,7 +135,7 @@ The D1 binding is declared in `wrangler.toml` (`binding = "DB"`); Pages picks it
 
 ## Database changes (migrations)
 
-- Never edit an applied migration. Add a new file `migrations/0002_<what>.sql` and apply it with `npm run db:migrate:remote` (wrangler records applied migrations in `d1_migrations`).
+- Never edit an applied migration. Add a new file `migrations/0002_<what>.sql` **and** add it to the list in `server/migrate.ts`. The app applies it on the next request, or you can run `npm run db:migrate:remote`. Both record it in `d1_migrations`.
 - Take a backup first (below). Migrations must only add or alter — never drop tables holding financial data.
 
 ## Backup and recovery

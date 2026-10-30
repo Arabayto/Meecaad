@@ -16,7 +16,7 @@ const persist = mkdtempSync(join(tmpdir(), 'meecaad-test-'));
 if (!existsSync('dist/index.html')) { mkdirSync('dist', { recursive: true }); writeFileSync('dist/index.html', '<!doctype html><title>test</title>'); }
 
 const wrangler = (...args) => execFileSync('npx', ['wrangler', ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1' } }).toString();
-wrangler('d1', 'migrations', 'apply', 'meecaad', '--local', '--persist-to', persist);
+// No migration step: the app must create its own schema on the first request.
 const sql = (q) => JSON.parse(wrangler('d1', 'execute', 'meecaad', '--local', '--persist-to', persist, '--json', '--command', q))[0].results;
 
 const server = spawn('npx', ['wrangler', 'pages', 'dev', 'dist', '--port', String(PORT), '--ip', '127.0.0.1', '--persist-to', persist], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1' } });
@@ -245,6 +245,7 @@ try {
     try { sql('DELETE FROM journal_lines'); } catch { blocked = true; }
     assert.ok(blocked, 'journal is append-only');
     assert.ok(sql('SELECT COUNT(*) n FROM audit_log')[0].n > 20);
+    assert.match(wrangler('d1', 'migrations', 'list', 'meecaad', '--local', '--persist-to', persist), /No migrations to apply/, 'auto-setup is recorded for wrangler');
   });
 
   console.log(`\n${passed} test groups passed`);

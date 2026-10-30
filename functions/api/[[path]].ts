@@ -7,6 +7,7 @@ import * as cat from '../../server/catalog';
 import * as fuel from '../../server/fuel';
 import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
+import { ensureSchema } from '../../server/migrate';
 import { BUSINESSES, HttpError, all, can, today, type Ctx, type Env, type Perm } from '../../server/lib';
 
 type Handler = (ctx: Ctx) => Promise<unknown>;
@@ -110,6 +111,8 @@ export async function onRequest({ request, env }: { request: Request; env: Env }
     if (method !== 'GET' && request.headers.get('X-Requested-With') !== 'meecaad') throw new HttpError(403, 'Request blocked');
     const body = method === 'GET' ? {} : await request.json().catch(() => ({}));
     const db = env.DB;
+    if (!db) throw new HttpError(503, 'The database is not connected yet. Put your D1 database ID in wrangler.toml (see docs/SETUP_FROM_PHONE.md) and redeploy.');
+    await ensureSchema(db);
 
     if (path === '/auth/me' && method === 'GET') return await auth.me(db, request);
     if (path === '/auth/login' && method === 'POST') return await auth.login(db, request, body);

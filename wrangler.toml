@@ -6,6 +6,7 @@ compatibility_date = "2025-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "meecaad"
-# Replace with the id printed by `npx wrangler d1 create meecaad` (see README).
+# Replace with your D1 database ID (Cloudflare dashboard → D1 → meecaad, or
+# the id printed by `npx wrangler d1 create meecaad`). See docs/SETUP_FROM_PHONE.md.
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
