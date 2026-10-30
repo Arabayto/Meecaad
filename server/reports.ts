@@ -245,7 +245,8 @@ export async function closingPreview(ctx: Ctx) {
   const date = entryDate(ctx.url.searchParams.get('date'));
   const [lines, existing, last, dayPnl, credit] = await Promise.all([
     closingLines(ctx.db, business, date),
-    first(ctx.db, `SELECT * FROM daily_closings WHERE business_id = ? AND entry_date = ? AND status = 'closed'`, business, date),
+    first(ctx.db, `SELECT d.*, u.full_name AS closed_by_name FROM daily_closings d JOIN users u ON u.id = d.closed_by
+                   WHERE d.business_id = ? AND d.entry_date = ? AND d.status = 'closed'`, business, date),
     first<any>(ctx.db, `SELECT MAX(entry_date) AS d FROM daily_closings WHERE business_id = ? AND status = 'closed'`, business),
     pnl(ctx.db, [business], date, date),
     first<any>(ctx.db, `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount END), 0) AS given, COALESCE(SUM(CASE WHEN amount < 0 THEN -amount END), 0) AS collected

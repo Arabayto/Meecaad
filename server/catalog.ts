@@ -116,7 +116,8 @@ function party(kind: 'customer' | 'supplier') {
   const account = kind === 'customer' ? 'receivable' : 'payable';
   const col = `${kind}_id`;
   const sign = kind === 'customer' ? 1 : -1;
-  const perm = kind === 'customer' ? 'sell' : 'purchase';
+  // Fuel attendants add the customers they give fuel on credit to.
+  const allowed = (ctx: Ctx) => (kind === 'customer' ? can(ctx.user, 'sell') || can(ctx.user, 'fuel') : can(ctx.user, 'purchase'));
 
   return {
     async list(ctx: Ctx) {
@@ -129,7 +130,7 @@ function party(kind: 'customer' | 'supplier') {
          FROM ${table} c ORDER BY c.active DESC, c.name`, ...scope);
     },
     async create(ctx: Ctx) {
-      if (!can(ctx.user, perm)) throw new HttpError(403, 'You do not have permission for this action');
+      if (!allowed(ctx)) throw new HttpError(403, 'You do not have permission for this action');
       const id = newId();
       const tx = new Tx(ctx.db, ctx.user);
       tx.run(`INSERT INTO ${table} (id, name, phone, notes, created_at, created_by) VALUES (?,?,?,?,?,?)`,
@@ -138,7 +139,7 @@ function party(kind: 'customer' | 'supplier') {
       return tx.commit(idemKey(ctx), { id });
     },
     async update(ctx: Ctx) {
-      if (!can(ctx.user, perm)) throw new HttpError(403, 'You do not have permission for this action');
+      if (!allowed(ctx)) throw new HttpError(403, 'You do not have permission for this action');
       const c = await first<any>(ctx.db, `SELECT * FROM ${table} WHERE id = ?`, ctx.params.id);
       if (!c) throw new HttpError(404, 'Not found');
       const b = ctx.body;

@@ -248,7 +248,9 @@ try {
   });
 
   console.log(`\n${passed} test groups passed`);
-} catch {
+} catch (e) {
+  process.exitCode = 1;
+  if (!String(e?.message).includes('→')) console.error(e);
   console.error('\nServer log (tail):\n' + log.split('\n').slice(-30).join('\n'));
 } finally {
   try { process.kill(-server.pid, 'SIGTERM'); } catch {}
