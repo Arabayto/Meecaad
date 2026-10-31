@@ -5,6 +5,7 @@ import {
   Store, Truck, UserCheck, Users, Wallet, X,
 } from 'lucide-react';
 import { useAuth, ROLE_LABELS, type Perm } from '../contexts/AuthContext';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 interface NavItem { label: string; path: string; icon: typeof Home; perms: Perm[]; kinds?: string[] }
 
@@ -109,7 +110,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
-        <div className="main-content">{children}</div>
+        <div className="main-content"><ErrorBoundary resetKey={location.pathname + business}>{children}</ErrorBoundary></div>
       </main>
     </div>
   );

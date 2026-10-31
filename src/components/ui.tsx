@@ -6,17 +6,29 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { fromCents, money, post, toCents } from '../api';
 
-/** Loads data and reloads when deps change. */
+/**
+ * Loads data and reloads when deps change. Data loaded for other deps (e.g.
+ * the previous business or date range) is never returned, and a slow older
+ * response can never overwrite a newer one.
+ */
 export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
-  const [data, setData] = useState<T | null>(null);
+  const key = JSON.stringify(deps);
+  const [state, setState] = useState<{ key: string; data: T | null }>({ key: '', data: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const latest = useRef(0);
   const reload = useCallback(() => {
+    const id = ++latest.current;
     setLoading(true);
-    return fn().then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message)).finally(() => setLoading(false));
+    return fn()
+      .then((d) => { if (id === latest.current) { setState({ key, data: d }); setError(null); } })
+      .catch((e) => { if (id === latest.current) setError(e.message); })
+      .finally(() => { if (id === latest.current) setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   useEffect(() => { reload(); }, [reload]);
+  const data = state.key === key ? state.data : null;
+  const setData = useCallback((d: T | null) => setState({ key, data: d }), [key]);
   return { data, loading, error, reload, setData };
 }
 
