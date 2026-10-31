@@ -140,7 +140,7 @@ The D1 binding is declared in `wrangler.toml` (`binding = "DB"`); Pages picks it
 
 ## Backup and recovery
 
-- **Point-in-time recovery (built into D1):** D1 Time Travel keeps 30 days of history.
+- **Point-in-time recovery (built into D1):** D1 Time Travel keeps 7 days of history on the free plan and 30 days on Workers Paid ($5/month).
   ```bash
   npx wrangler d1 time-travel info meecaad
   ```
@@ -161,6 +161,10 @@ The D1 binding is declared in `wrangler.toml` (`binding = "DB"`); Pages picks it
   npx wrangler d1 execute meecaad-restore --remote --file=backups/meecaad-YYYYMMDD-HHMMSS.sql
   ```
   then point the `DB` binding at it.
+
+## Costs and limits
+
+Everything runs on Cloudflare's free plan to start. Watch **D1 → meecaad → Metrics → Rows read**. The free plan allows 5 million rows read per day. Some dashboard figures (money balances, debts) add up all history, so reads per dashboard visit grow as data accumulates. Move to **Workers Paid ($5/month)** before daily reads approach the limit; if the limit is reached, the API stops working until midnight UTC. The other free limits (100k API requests/day, 100k rows written/day, 5 GB storage) are far above a three-business workload.
 
 ## Security notes
 
