@@ -16,7 +16,8 @@ export async function listProducts(ctx: Ctx) {
   return all<any>(ctx.db,
     `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty FROM sales s JOIN sale_items si ON si.sale_id = s.id
                   WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date >= ? AND s.status = 'completed' GROUP BY si.product_id) ` : ''}
-     SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''}
+     SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''},
+       CASE WHEN p.kind = 'menu' THEN (SELECT ROUND(SUM(r.qty * i.avg_cost)) FROM recipe_items r JOIN products i ON i.id = r.ingredient_id WHERE r.menu_id = p.id) END AS recipe_cost
      FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''}
      WHERE p.business_id IN (${placeholders(scope)})
      ORDER BY p.active DESC, p.kind, p.category, p.name`, ...(stats ? [...scope, today(-30)] : []), ...scope);

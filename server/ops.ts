@@ -29,7 +29,16 @@ function dateRange(ctx: Ctx) {
 
 // ── Sales ───────────────────────────────────────────────────────
 export async function createSale(ctx: Ctx) {
-  const b = ctx.body;
+  const { tx, id } = await prepareSale(ctx, ctx.body);
+  return tx.commit(idemKey(ctx), { id });
+}
+
+/**
+ * Validates a sale and collects all its statements in one Tx (not yet saved),
+ * so callers like "pay an open order" can add their own statements to the
+ * same atomic batch.
+ */
+export async function prepareSale(ctx: Ctx, b: any) {
   const business = requireBiz(ctx, b.business, 'sell');
   if (business === 'fuel') throw bad('Fuel sales are recorded from pump meter readings');
   const date = entryDate(b.date);
@@ -37,13 +46,28 @@ export async function createSale(ctx: Ctx) {
   if (!items.length) throw bad('Add at least one item');
   const products = await all<any>(ctx.db, `SELECT * FROM products WHERE business_id = ? AND active = 1 AND kind IN ('menu', 'item') AND id IN (${placeholders(items)})`,
     business, ...items.map((i: any) => String(i.product)));
+  // Dishes with a recipe take their ingredients from stock (restaurant only).
+  const recipes = business === 'restaurant' && products.some((p) => !p.track_stock)
+    ? await all<any>(ctx.db, `SELECT r.menu_id, r.qty, i.id, i.name, i.unit, i.avg_cost, i.stock_qty FROM recipe_items r JOIN products i ON i.id = r.ingredient_id
+                              WHERE i.business_id = 'restaurant' AND r.menu_id IN (${placeholders(products)})`, ...products.map((p) => p.id))
+    : [];
+  const need = new Map<string, { name: string; unit: string; stock: number; qty: number }>();
   const lines = items.map((i: any) => {
     const p = products.find((x) => x.id === String(i.product));
     if (!p) throw bad('One of the items is not available for sale');
     const q = qty(i.qty, `Quantity of ${p.name}`, { positive: true });
-    const cost = p.track_stock ? Math.round(q * p.avg_cost) : 0;
-    return { id: newId(), p, qty: q, price: p.sale_price, total: Math.round(q * p.sale_price), cost };
+    const components = p.track_stock ? [] : recipes.filter((r) => r.menu_id === p.id);
+    for (const c of components) {
+      const n = need.get(c.id) ?? { name: c.name, unit: c.unit, stock: c.stock_qty, qty: 0 };
+      n.qty = round3(n.qty + c.qty * q);
+      need.set(c.id, n);
+    }
+    const unitCost = p.track_stock ? p.avg_cost : components.reduce((s: number, c: any) => s + c.qty * c.avg_cost, 0);
+    return { id: newId(), p, qty: q, price: p.sale_price, total: Math.round(q * p.sale_price), unitCost, cost: Math.round(q * unitCost), components };
   });
+  for (const n of need.values()) {
+    if (n.qty > n.stock + 0.0005) throw new HttpError(409, `Not enough ${n.name} in stock for this order (${round3(n.stock)} ${n.unit} left, ${n.qty} needed). Record the purchase first.`);
+  }
   const subtotal = lines.reduce((s: number, l: any) => s + l.total, 0);
   const discount = cents(b.discount ?? 0, 'Discount');
   if (discount > subtotal) throw bad('Discount is more than the sale');
@@ -59,17 +83,23 @@ export async function createSale(ctx: Ctx) {
   const customer = await partyIn(ctx.db, 'customer', b.customer, business);
   if (credit > 0 && !customer) throw bad(`Choose the customer who owes the unpaid ${(credit / 100).toFixed(2)}`);
   await assertDayOpen(ctx.db, business, date);
-  const costTotal = lines.reduce((s: number, l: any) => s + l.cost, 0);
+  // Cost of goods = exactly what leaves stock (stock-counted items and recipe ingredients), so inventory and the journal agree.
+  const stockOut = lines.reduce((s: number, l: any) => s + (l.p.track_stock ? l.cost : l.components.reduce((t: number, c: any) => t + Math.round(c.qty * l.qty * c.avg_cost), 0)), 0);
 
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`INSERT INTO sales (id, business_id, number, entry_date, customer_id, subtotal, discount, total, paid_amount, credit_amount, cost_total, note, created_by, created_at)
           VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM sales WHERE business_id = ?), ?,?,?,?,?,?,?,?,?,?,?)`,
-    id, business, business, date, customer?.id, subtotal, discount, total, paid, credit, costTotal, str(b.note, 'Note', { max: 300 }), ctx.user.id, nowIso());
+    id, business, business, date, customer?.id, subtotal, discount, total, paid, credit, stockOut, str(b.note, 'Note', { max: 300 }), ctx.user.id, nowIso());
   for (const l of lines) {
     tx.run('INSERT INTO sale_items (id, sale_id, product_id, name, qty, unit_price, unit_cost, line_total) VALUES (?,?,?,?,?,?,?,?)',
-      l.id, id, l.p.id, l.p.name, l.qty, l.price, l.p.track_stock ? l.p.avg_cost : 0, l.total);
+      l.id, id, l.p.id, l.p.name, l.qty, l.price, l.unitCost, l.total);
     if (l.p.track_stock) tx.stock({ business, product: l.p.id, date, type: 'sale', qty: -l.qty, unitCost: l.p.avg_cost, value: -l.cost, refType: 'sale', refId: id });
+    for (const c of l.components) {
+      tx.run('INSERT INTO sale_item_components (id, sale_item_id, product_id, qty, unit_cost) VALUES (?,?,?,?,?)', newId(), l.id, c.id, c.qty, c.avg_cost);
+      tx.stock({ business, product: c.id, date, type: 'sale', qty: -round3(c.qty * l.qty), unitCost: c.avg_cost, value: -Math.round(c.qty * l.qty * c.avg_cost), refType: 'sale', refId: id,
+        reason: `${l.qty} × ${l.p.name}` });
+    }
   }
   for (const p of payments) tx.run('INSERT INTO sale_payments (id, sale_id, method_id, amount) VALUES (?,?,?,?)', newId(), id, p.method, p.amount);
   const memo = `Sale${customer ? ` to ${customer.name}` : ''}: ${lines.map((l: any) => `${l.qty} × ${l.p.name}`).join(', ')}`.slice(0, 300);
@@ -77,11 +107,11 @@ export async function createSale(ctx: Ctx) {
     { account: 'sales', amount: -total },
     ...payments.map((p): Line => ({ account: 'cash', amount: p.amount, method: p.method })),
     { account: 'receivable', amount: credit, customer: customer?.id },
-    { account: 'cogs', amount: costTotal },
-    { account: 'inventory', amount: -costTotal },
+    { account: 'cogs', amount: stockOut },
+    { account: 'inventory', amount: -stockOut },
   ]);
   tx.audit('create', 'sale', id, business, { total, paid, credit, items: lines.length });
-  return tx.commit(idemKey(ctx), { id });
+  return { tx, id, business, total };
 }
 
 export async function listSales(ctx: Ctx) {
@@ -132,6 +162,12 @@ export async function voidSale(ctx: Ctx) {
     tx.run(REPRICE, i.qty, value, i.qty, i.product_id);
     tx.stock({ business, product: i.product_id, date, type: 'sale_void', qty: i.qty, unitCost: i.unit_cost, value, refType: 'sale', refId: s.id, reason });
   }
+  // A cancelled sale was never served: recipe ingredients go back at the cost they left with.
+  for (const c of await all<any>(ctx.db, `SELECT c.*, si.qty AS sold FROM sale_item_components c JOIN sale_items si ON si.id = c.sale_item_id WHERE si.sale_id = ?`, s.id)) {
+    const q = round3(c.qty * c.sold), value = Math.round(c.qty * c.sold * c.unit_cost);
+    tx.run(REPRICE, q, value, q, c.product_id);
+    tx.stock({ business, product: c.product_id, date, type: 'sale_void', qty: q, unitCost: c.unit_cost, value, refType: 'sale', refId: s.id, reason });
+  }
   await tx.reverse('sale', s.id, date, 'sale_void', `Cancelled sale #${s.number}: ${reason}`);
   tx.audit('void', 'sale', s.id, business, { reason, total: s.total });
   return tx.commit(idemKey(ctx), { id: s.id });
@@ -157,6 +193,7 @@ export async function returnSale(ctx: Ctx) {
     // The last unit returned takes whatever is left of the line, so rounding never leaves cents behind.
     const already = Math.round(si.line_total * factor * (si.returned_qty / si.qty));
     const amount = full ? Math.round(si.line_total * factor) - already : Math.round(si.line_total * factor * (q / si.qty));
+    // Only stock-counted items can go back on the shelf; a returned cooked dish cannot go back into its ingredients.
     return { si, qty: q, amount, cost: si.track_stock ? Math.round(q * si.unit_cost) : 0 };
   });
   if (!chosen.length) throw bad('Choose the items being returned');

@@ -288,6 +288,51 @@ try {
     assert.equal((await tr.call('GET', '/users')).status, 403);
   });
 
+  await step('restaurant: tables, order saved then paid later, recipes take ingredients, cancel puts them back', async () => {
+    const sugarNow = () => owner.get('/products?business=restaurant').then((l) => l.find((p) => p.id === sugar));
+    const before = await sugarNow();
+    // Recipe: one tea uses 0.02 kg sugar.
+    await owner.post(`/restaurant/recipes/${tea}`, { items: [{ ingredient: sugar, qty: 0.02 }] });
+    assert.equal((await owner.get(`/restaurant/recipes/${tea}`)).cost, Math.round(0.02 * before.avg_cost));
+    assert.equal((await owner.call('POST', `/restaurant/recipes/${tea}`, { items: [{ ingredient: rice, qty: 1 }] })).status, 400, 'store product cannot be a restaurant ingredient');
+    const t1 = (await owner.post('/restaurant/tables', { name: 'Table 1' })).id;
+    // Take an order, then add to it, then pay later.
+    const order = (await owner.post('/restaurant/orders', { table: t1, items: [{ product: tea, qty: 3 }] })).id;
+    assert.equal((await owner.call('POST', '/restaurant/orders', { table: t1, items: [{ product: tea, qty: 1 }] })).status, 409, 'one open order per table');
+    assert.equal((await owner.call('POST', '/restaurant/orders', { table: t1, items: [{ product: rice, qty: 1 }] })).status, 400, 'store items are not on the menu');
+    const day0 = (await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.revenue;
+    await owner.ok('PATCH', `/restaurant/orders/${order}`, { items: [{ product: tea, qty: 5 }] });
+    assert.equal((await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.revenue, day0, 'an open order is not a sale yet');
+    assert.equal((await owner.get('/restaurant/tables')).find((t) => t.id === t1).order_id, order);
+    const key = crypto.randomUUID();
+    const paid = await owner.post(`/restaurant/orders/${order}/pay`, { payments: [{ method: 'cash', amount: 250 }] }, key);
+    assert.equal((await owner.post(`/restaurant/orders/${order}/pay`, { payments: [{ method: 'cash', amount: 250 }] }, key)).id, paid.id, 'double click returns the same sale');
+    assert.equal((await owner.call('POST', `/restaurant/orders/${order}/pay`, { payments: [{ method: 'cash', amount: 250 }] })).status, 409, 'cannot pay twice');
+    const sale = await owner.get(`/sales/${paid.id}`);
+    assert.deepEqual([sale.total, sale.cost_total], [250, Math.round(0.1 * before.avg_cost)]);
+    assert.ok(!(await owner.get('/restaurant/tables')).find((t) => t.id === t1).order_id, 'table is free again');
+    assert.ok(Math.abs((await sugarNow()).stock_qty - (before.stock_qty - 0.1)) < 0.0005, 'recipe took 0.1 kg sugar');
+    assert.equal((await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.revenue, day0 + 250);
+    // Cancel an unpaid order: nothing changes.
+    const o2 = (await owner.post('/restaurant/orders', { label: 'Takeaway – Ali', items: [{ product: tea, qty: 1 }] })).id;
+    assert.equal((await owner.call('POST', `/restaurant/orders/${o2}/cancel`, {})).status, 400, 'reason required');
+    await owner.post(`/restaurant/orders/${o2}/cancel`, { reason: 'Customer left' });
+    assert.equal((await owner.get('/restaurant/orders')).length, 0);
+    // Cancelling the paid sale puts the sugar back.
+    await owner.post(`/sales/${paid.id}/void`, { reason: 'Wrong table' });
+    assert.ok(Math.abs((await sugarNow()).stock_qty - before.stock_qty) < 0.0005, 'ingredients back after cancellation');
+    // Not enough ingredient: clear message, nothing saved.
+    const big = await owner.call('POST', '/sales', { business: 'restaurant', items: [{ product: tea, qty: 100000 }], payments: [{ method: 'cash', amount: 5000000 }] });
+    assert.equal(big.status, 409); assert.match(big.data.message, /Not enough Sugar/);
+    // Other businesses cannot reach restaurant tables, orders or recipes.
+    const sc = client();
+    await sc.post('/auth/login', { username: 'storecash', password: 'store-pass-1' });
+    for (const [m, path, body] of [['GET', '/restaurant/tables'], ['GET', '/restaurant/orders'], ['POST', '/restaurant/orders', { label: 'x', items: [{ product: tea, qty: 1 }] }],
+      ['GET', `/restaurant/recipes/${tea}`], ['POST', '/restaurant/tables', { name: 'x' }]]) {
+      assert.equal((await sc.call(m, path, body)).status, 403, `${m} ${path}`);
+    }
+  });
+
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
     assert.deepEqual(sql('SELECT entry_id, SUM(amount) s FROM journal_lines GROUP BY entry_id HAVING s <> 0'), []);
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);

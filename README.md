@@ -60,7 +60,7 @@ How the common mistakes are avoided:
 
 ## Business modules
 
-- **Restaurant & Cafe** — menu items and prices; fast POS with categories and search; split payments (Cash/Zaad/Edahab/any method); credit to a customer; discounts; printable receipts; sales history with returns/cancellations; ingredients with purchases, kitchen usage (→ cost of food) and waste; drinks can be stock-tracked.
+- **Restaurant & Cafe** — menu with categories and prices; **recipes** (selling a dish takes its ingredients from stock at their cost; the menu shows cost and margin per dish); **tables and open orders** (save an order, add to it, pay later); quick sales; split payments (Cash/Zaad/Edahab/any method); credit to a customer; discounts; printable receipts; sales history with returns/cancellations; ingredients with purchases, extra kitchen usage and waste; bottled drinks can be stock-counted.
 - **Fuel Station** — fuel types and price per litre (every change kept in price history); tanks with book stock; pumps with meters; deliveries into a tank (purchases, paid or on supplier credit); **shift readings**: opening → closing meter = litres sold → money expected, then cash/mobile received and credit customers, with any shortage/overage requiring a reason; a meter that does not continue from the last reading is flagged; **tank dips** compare measured litres to the book and record the variance; **reconciliation**: start + delivered − sold ± dips = should-be-now, vs the last dip, plus daily expected/received/difference.
 - **Store** — products, categories, barcodes, purchase/selling prices, suppliers, purchases, sales, returns, waste, stock counts, customer debts, supplier payments, best sellers, low-stock alerts.
 
@@ -70,17 +70,28 @@ How the common mistakes are avoided:
 - Sales, cost of goods, expenses, losses, estimated profit, money available (per business × payment method), customers owe us, we owe suppliers, stock value, money received/paid today, recent activity, and alerts: out-of-stock/low stock, low or negative tanks, fuel missing in dips, fuel shift shortages, meter gaps, cash shortages at closing, days not closed, overdue debts (no payment for 30 days), negative money balances.
 - **Daily closing** per business: opening balance, sales, debts collected, expenses, stock/supplier payments, transfers/owner money, **expected** (calculated), **counted** (entered), **difference** (explanation required). The difference is posted as a cash difference so the books match the real money — it is never hidden. Closed days are locked; only the owner/manager can reopen the latest day, with a reason, which reverses the difference.
 
-## Roles
+## Portals and roles
 
-| Role | Can |
+Three independent business portals plus an owner area. Each has its own sign-in page, sidebar, dashboard and navigation; there is no business switcher.
+
+| Address | For |
 |---|---|
-| Owner | Everything, all businesses, users, settings, audit log |
-| Manager | For their assigned businesses: sell, stock, purchases, expenses, closing, cancellations/returns, prices, transfers, reports |
-| Cashier | Sell, collect debts, close the day (assigned businesses) |
-| Restaurant / Store staff | Sell and record usage/waste in their business |
-| Fuel station staff | Shift readings, money received, credit customers, tank dips |
+| `/restaurant` | Restaurant & Cafe: orders & tables, menu with recipes, ingredients |
+| `/store` | Store: point of sale, products & stock, purchases |
+| `/fuel` | Fuel Station: pumps & shifts, tanks, deliveries, fuel prices |
+| `/admin` | Owner only: all businesses together, users & roles, settings, audit log |
+| `/` | Choose a portal (one portal → straight in) |
 
-The server enforces every permission; the UI only hides what a user cannot use.
+A person has one account and a **role in each business** they work in:
+
+| Role | Restaurant / Store | Fuel Station |
+|---|---|---|
+| Manager | Everything for that business except users | Same, with pump shifts instead of a till |
+| Cashier | Sell, collect debts, close the day | Record pump shifts, collect debts, close the day |
+| Staff | Sell, record stock usage/waste | Pump readings and tank dips |
+| Owner | Everything, every business, the owner admin | |
+
+Customers and suppliers belong to the business(es) they are linked to. The server enforces every business boundary and permission; the screens only hide what cannot be used. Audit findings, changes and the data migration are in [docs/BUSINESS_SEPARATION.md](docs/BUSINESS_SEPARATION.md).
 
 ## Run locally
 

@@ -7,6 +7,7 @@ import * as cat from '../../server/catalog';
 import * as fuel from '../../server/fuel';
 import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
+import * as rest from '../../server/restaurant';
 import { ensureSchema } from '../../server/migrate';
 import { metered } from '../../server/metered';
 import { BUSINESSES, HttpError, all, can, today, type Ctx, type Env, type Perm } from '../../server/lib';
@@ -67,6 +68,17 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/fuel/dips', fuel.listDips, ''],
   ['POST', '/fuel/dips', fuel.createDip, ''],
   ['GET', '/fuel/reconciliation', fuel.reconciliation, ''],
+
+  ['GET', '/restaurant/tables', rest.listTables, ''],
+  ['POST', '/restaurant/tables', rest.createTable, ''],
+  ['PATCH', '/restaurant/tables/:id', rest.updateTable, ''],
+  ['GET', '/restaurant/orders', rest.listOrders, ''],
+  ['POST', '/restaurant/orders', rest.createOrder, ''],
+  ['PATCH', '/restaurant/orders/:id', rest.updateOrder, ''],
+  ['POST', '/restaurant/orders/:id/pay', rest.payOrder, ''],
+  ['POST', '/restaurant/orders/:id/cancel', rest.cancelOrder, ''],
+  ['GET', '/restaurant/recipes/:id', rest.getRecipe, ''],
+  ['POST', '/restaurant/recipes/:id', rest.saveRecipe, ''],
 
   ['GET', '/dashboard', rep.dashboard, 'reports'],
   ['GET', '/reports/summary', rep.summary, 'reports'],
@@ -136,6 +148,13 @@ async function handle(request: Request, db: D1Database): Promise<Response> {
       if (!params) continue;
       if (perm && !can(user, perm)) throw new HttpError(403, 'You do not have permission for this action');
       if (!user.businesses.length && BUSINESSES.length) throw new HttpError(403, 'Your account has no business assigned');
+      // A repeated request (double tap, retry after a lost connection) gets the first result back,
+      // before any check that the first request has already changed (e.g. "already paid").
+      const key = method === 'POST' ? request.headers.get('Idempotency-Key') : null;
+      if (key) {
+        const prior = await db.prepare('SELECT response FROM idempotency_keys WHERE key = ?').bind(`${user.id}:${key}`).first<{ response: string }>();
+        if (prior) return json(JSON.parse(prior.response));
+      }
       return json(await handler({ db, req: request, url, params, body, user }));
     }
     throw new HttpError(404, 'Not found');
