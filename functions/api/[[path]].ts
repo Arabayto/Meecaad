@@ -8,6 +8,7 @@ import * as fuel from '../../server/fuel';
 import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
 import { ensureSchema } from '../../server/migrate';
+import { metered } from '../../server/metered';
 import { BUSINESSES, HttpError, all, can, today, type Ctx, type Env, type Perm } from '../../server/lib';
 
 type Handler = (ctx: Ctx) => Promise<unknown>;
@@ -103,6 +104,15 @@ function match(pattern: string, path: string): Record<string, string> | null {
 }
 
 export async function onRequest({ request, env }: { request: Request; env: Env }): Promise<Response> {
+  const meter = env.DB ? metered(env.DB) : null;
+  const res = await handle(request, meter?.db as D1Database);
+  const rows = meter?.rows() ?? 0;
+  res.headers.set('X-Rows-Read', String(rows));
+  if (rows > 50_000) console.warn(`Heavy request: ${request.method} ${new URL(request.url).pathname} read ${rows} rows`);
+  return res;
+}
+
+async function handle(request: Request, db: D1Database): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api/, '').replace(/\/$/, '') || '/';
   const method = request.method.toUpperCase();
@@ -110,7 +120,6 @@ export async function onRequest({ request, env }: { request: Request; env: Env }
     // Mutations must come from our own page: a cross-site form or script cannot set this header.
     if (method !== 'GET' && request.headers.get('X-Requested-With') !== 'meecaad') throw new HttpError(403, 'Request blocked');
     const body = method === 'GET' ? {} : await request.json().catch(() => ({}));
-    const db = env.DB;
     if (!db) throw new HttpError(503, 'The database is not connected yet. Put your D1 database ID in wrangler.toml (see docs/SETUP_FROM_PHONE.md) and redeploy.');
     await ensureSchema(db);
 

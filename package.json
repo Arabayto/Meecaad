@@ -13,7 +13,8 @@
     "db:backup": "wrangler d1 export meecaad --remote --output backups/meecaad-$(date +%Y%m%d-%H%M%S).sql",
     "test": "npm run embed && node tests/run.mjs",
     "deploy": "npm run build && wrangler pages deploy dist --project-name=meecaad",
-    "embed": "node scripts/embed-migrations.mjs"
+    "embed": "node scripts/embed-migrations.mjs",
+    "test:volume": "npm run embed && node tests/volume.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
