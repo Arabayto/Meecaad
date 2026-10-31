@@ -19,7 +19,7 @@ export function StockPage() {
   const kind = businesses.find((b) => b.id === business)?.kind ?? 'store';
   const [tab, setTab] = useState('products');
   const [search, setSearch] = useState('');
-  const products = useLoad(() => get('/products', { business }), [business]);
+  const products = useLoad(() => get('/products', { business, stats: '1' }), [business]);
   const moves = useLoad(() => (tab === 'history' ? get('/stock/movements', { business }) : Promise.resolve(null)), [business, tab]);
   const [edit, setEdit] = useState<any>(null);
   const [adjust, setAdjust] = useState<any>(null);

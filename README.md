@@ -164,7 +164,28 @@ The D1 binding is declared in `wrangler.toml` (`binding = "DB"`); Pages picks it
 
 ## Costs and limits
 
-Everything runs on Cloudflare's free plan to start. Watch **D1 → meecaad → Metrics → Rows read**. The free plan allows 5 million rows read per day. Some dashboard figures (money balances, debts) add up all history, so reads per dashboard visit grow as data accumulates. Move to **Workers Paid ($5/month)** before daily reads approach the limit; if the limit is reached, the API stops working until midnight UTC. The other free limits (100k API requests/day, 100k rows written/day, 5 GB storage) are far above a three-business workload.
+Everything runs on Cloudflare's free plan. Cloudflare bills D1 by **rows read**: the free plan allows 5 million per day.
+
+Screens never re-add the whole history. Two summary tables are updated in the same atomic save as every money record (`migrations/0002_summaries.sql`), and the tests check they always equal the full journal:
+- `account_balances`: current balance of every money account, customer and supplier.
+- `daily_totals`: per business, day and kind of transaction.
+
+All list screens read through indexes, limited to the dates they show.
+
+Measured with `npm run test:volume`, which simulates a year of activity: ~33,000 sales, 106,000 money records, 730 fuel shifts and daily closings. Rows read per screen visit:
+
+| Screen | Rows read |
+|---|---:|
+| Owner dashboard (all businesses) | ~3,500 (was ~288,000 before the summary tables) |
+| Sell (till) | ~500 |
+| Daily closing | ~3,300 |
+| Stock & products (incl. sold in 30 days) | ~8,200 |
+| Reports for a month | ~22,000 (depends on the date range, not on total history) |
+| Saving a sale | ~26 |
+
+At these rates, even hundreds of screen visits a day stay far below the free limit. `npm run test:volume` fails if any screen goes over 30,000 rows, so a slow query can't slip back in. Every API response carries an `X-Rows-Read` header, and requests over 50,000 rows are logged in Cloudflare (Workers & Pages → meecaad → Logs).
+
+Still worth checking monthly: **D1 → meecaad → Metrics → Rows read**. If the limit is ever reached, the API stops working until midnight UTC. **Workers Paid ($5/month)** raises the limits far beyond this workload and gives 30 days of Time Travel instead of 7.
 
 ## Security notes
 

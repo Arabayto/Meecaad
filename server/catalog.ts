@@ -2,7 +2,7 @@
 
 import {
   HttpError, Tx, all, bad, bizScope, bool, can, cents, entryDate, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, round3, str,
-  assertDayOpen, type Ctx,
+  assertDayOpen, today, type Ctx,
 } from './lib';
 
 const KINDS: Record<string, string[]> = { restaurant: ['menu', 'ingredient'], store: ['item'], fuel: ['fuel'] };
@@ -10,13 +10,16 @@ const KINDS: Record<string, string[]> = { restaurant: ['menu', 'ingredient'], st
 // ── Products ────────────────────────────────────────────────────
 export async function listProducts(ctx: Ctx) {
   const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
-  const rows = await all<any>(ctx.db,
-    `SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value,
-            (SELECT COALESCE(SUM(si.qty - si.returned_qty), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
-              WHERE si.product_id = p.id AND s.status = 'completed' AND s.entry_date >= date('now', '-30 days')) AS sold_30d
-     FROM products p WHERE p.business_id IN (${placeholders(scope)})
-     ORDER BY p.active DESC, p.kind, p.category, p.name`, ...scope);
-  return rows;
+  // "Sold in 30 days" is only worked out when a screen asks for it (Stock page),
+  // reading just the last 30 days of sales — not on every till load.
+  const stats = ctx.url.searchParams.get('stats') === '1';
+  return all<any>(ctx.db,
+    `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty FROM sales s JOIN sale_items si ON si.sale_id = s.id
+                  WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date >= ? AND s.status = 'completed' GROUP BY si.product_id) ` : ''}
+     SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''}
+     FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''}
+     WHERE p.business_id IN (${placeholders(scope)})
+     ORDER BY p.active DESC, p.kind, p.category, p.name`, ...(stats ? [...scope, today(-30)] : []), ...scope);
 }
 
 export async function createProduct(ctx: Ctx) {
@@ -108,6 +111,7 @@ export async function stockMovements(ctx: Ctx) {
      FROM stock_movements m JOIN products p ON p.id = m.product_id LEFT JOIN fuel_tanks t ON t.id = m.tank_id JOIN users u ON u.id = m.created_by
      WHERE m.business_id IN (${placeholders(scope)}) ${product ? 'AND m.product_id = ?' : ''}
      ORDER BY m.created_at DESC LIMIT 300`, ...scope, ...(product ? [product] : []));
+  // (indexes: business_id + created_at, product_id + created_at — reads only the 300 rows shown)
 }
 
 // ── Customers & suppliers ───────────────────────────────────────
@@ -122,12 +126,16 @@ function party(kind: 'customer' | 'supplier') {
   return {
     async list(ctx: Ctx) {
       const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+      // Balances come from the running totals (account_balances), not the full history.
+      // A charge raises a customer's balance but lowers a supplier's (amounts are + debit / − credit).
+      const [charge, payment] = kind === 'customer' ? ['last_increase', 'last_decrease'] : ['last_decrease', 'last_increase'];
       return all(ctx.db,
-        `SELECT c.*,
-            COALESCE((SELECT ${sign} * SUM(l.amount) FROM journal_lines l WHERE l.${col} = c.id AND l.account = '${account}' AND l.business_id IN (${placeholders(scope)})), 0) AS balance,
-            (SELECT MAX(l.entry_date) FROM journal_lines l WHERE l.${col} = c.id AND l.account = '${account}' AND ${sign} * l.amount > 0) AS last_charge,
-            (SELECT MAX(l.entry_date) FROM journal_lines l WHERE l.${col} = c.id AND l.account = '${account}' AND ${sign} * l.amount < 0) AS last_payment
-         FROM ${table} c ORDER BY c.active DESC, c.name`, ...scope);
+        `SELECT c.*, COALESCE(b.balance, 0) AS balance, b.last_charge, b.last_payment
+         FROM ${table} c LEFT JOIN (
+           SELECT ${col} AS id, ${sign} * SUM(balance) AS balance, MAX(${charge}) AS last_charge, MAX(${payment}) AS last_payment
+           FROM account_balances WHERE account = '${account}' AND business_id IN (${placeholders(scope)}) GROUP BY ${col}
+         ) b ON b.id = c.id
+         ORDER BY c.active DESC, c.name`, ...scope);
     },
     async create(ctx: Ctx) {
       if (!allowed(ctx)) throw new HttpError(403, 'You do not have permission for this action');

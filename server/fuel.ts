@@ -94,7 +94,7 @@ export async function listShifts(ctx: Ctx) {
   const to = ctx.url.searchParams.get('to') || today();
   return all(ctx.db,
     `SELECT s.*, u.full_name AS created_by_name FROM fuel_shifts s JOIN users u ON u.id = s.created_by
-     WHERE s.entry_date BETWEEN ? AND ? ORDER BY s.entry_date DESC, s.created_at DESC`, from, to);
+     WHERE s.business_id = 'fuel' AND s.entry_date BETWEEN ? AND ? ORDER BY s.entry_date DESC, s.created_at DESC`, from, to);
 }
 
 export async function getShift(ctx: Ctx) {
@@ -198,10 +198,10 @@ export async function reconciliation(ctx: Ctx) {
   const days = await all<any>(ctx.db,
     `SELECT entry_date, COUNT(*) AS shifts, ROUND(SUM(total_liters), 3) AS liters, SUM(expected_amount) AS expected, SUM(collected_amount) AS collected,
             SUM(credit_amount) AS credit, SUM(difference) AS difference
-     FROM fuel_shifts WHERE status = 'completed' AND entry_date BETWEEN ? AND ? GROUP BY entry_date ORDER BY entry_date DESC`, from, to);
+     FROM fuel_shifts WHERE business_id = 'fuel' AND status = 'completed' AND entry_date BETWEEN ? AND ? GROUP BY entry_date ORDER BY entry_date DESC`, from, to);
   const byFuel = await all<any>(ctx.db,
     `SELECT p.name AS fuel_name, ROUND(SUM(r.liters), 3) AS liters, SUM(r.amount) AS amount
      FROM fuel_shift_readings r JOIN fuel_shifts s ON s.id = r.shift_id JOIN products p ON p.id = r.product_id
-     WHERE s.status = 'completed' AND s.entry_date BETWEEN ? AND ? GROUP BY p.id ORDER BY p.name`, from, to);
+     WHERE s.business_id = 'fuel' AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ? GROUP BY p.id ORDER BY p.name`, from, to);
   return { from, to, tanks, days, byFuel };
 }

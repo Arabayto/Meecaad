@@ -124,7 +124,7 @@ async function main() {
     'Owner dashboard (one business)': ['/dashboard?business=store'],
     'Sell (POS)': ['/products?business=store', '/customers?business=store'],
     'Sales history (7 days)': [`/sales?business=store&from=${dayStr(today, 6)}&to=${today}`],
-    'Stock & products': ['/products?business=store'],
+    'Stock & products': ['/products?business=store&stats=1'],
     'Stock history': ['/stock/movements?business=store'],
     'Purchases': ['/products?business=store', '/suppliers?business=store', `/purchases?business=store&from=${dayStr(today, 30)}&to=${today}`],
     'Expenses (month)': [`/expenses?business=store&from=${month}&to=${today}`, '/suppliers?business=store'],
@@ -150,7 +150,7 @@ async function main() {
   for (const [n, r] of results) console.log(`  ${String(r).padStart(9)}  ${n}`);
   const total = results.reduce((t, [, r]) => t + r, 0);
   console.log(`  ${String(total).padStart(9)}  TOTAL (every screen opened once)`);
-  const BUDGET = Number(process.env.BUDGET ?? 0);
+  const BUDGET = Number(process.env.BUDGET ?? 30000);  // rows per screen
   if (BUDGET && results.some(([, r]) => r > BUDGET)) { console.error(`Over budget (${BUDGET} rows per screen)`); process.exitCode = 1; }
 }
 

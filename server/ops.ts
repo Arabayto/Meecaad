@@ -13,11 +13,11 @@ const REPRICE = `UPDATE products SET avg_cost = CASE
     ELSE avg_cost END WHERE id = ?`;
 
 async function customerBalance(db: D1Database, business: string, customer: string) {
-  const r = await first<{ b: number }>(db, `SELECT COALESCE(SUM(amount), 0) AS b FROM journal_lines WHERE account = 'receivable' AND business_id = ? AND customer_id = ?`, business, customer);
+  const r = await first<{ b: number }>(db, `SELECT COALESCE(SUM(balance), 0) AS b FROM account_balances WHERE business_id = ? AND account = 'receivable' AND method_id = '' AND customer_id = ?`, business, customer);
   return r?.b ?? 0;
 }
 async function supplierBalance(db: D1Database, business: string, supplier: string) {
-  const r = await first<{ b: number }>(db, `SELECT COALESCE(-SUM(amount), 0) AS b FROM journal_lines WHERE account = 'payable' AND business_id = ? AND supplier_id = ?`, business, supplier);
+  const r = await first<{ b: number }>(db, `SELECT COALESCE(-SUM(balance), 0) AS b FROM account_balances WHERE business_id = ? AND account = 'payable' AND method_id = '' AND customer_id = '' AND supplier_id = ?`, business, supplier);
   return r?.b ?? 0;
 }
 async function existing(db: D1Database, table: string, id: unknown, label: string) {
@@ -391,8 +391,8 @@ export async function listMovements(ctx: Ctx) {
     `SELECT m.*, pm.name AS method_name, tm.name AS to_method_name, c.name AS customer_name, s.name AS supplier_name, u.full_name AS created_by_name
      FROM money_movements m JOIN payment_methods pm ON pm.id = m.method_id LEFT JOIN payment_methods tm ON tm.id = m.to_method_id
      LEFT JOIN customers c ON c.id = m.customer_id LEFT JOIN suppliers s ON s.id = m.supplier_id JOIN users u ON u.id = m.created_by
-     WHERE (m.business_id IN (${placeholders(scope)}) OR m.to_business_id IN (${placeholders(scope)})) AND m.entry_date BETWEEN ? AND ? ${type ? 'AND m.type = ?' : ''}
-     ORDER BY m.created_at DESC LIMIT 500`, ...scope, ...scope, from, to, ...(type ? [type] : []));
+     WHERE m.entry_date BETWEEN ? AND ? AND (m.business_id IN (${placeholders(scope)}) OR m.to_business_id IN (${placeholders(scope)})) ${type ? 'AND m.type = ?' : ''}
+     ORDER BY m.created_at DESC LIMIT 500`, from, to, ...scope, ...scope, ...(type ? [type] : []));
 }
 
 export async function voidMovement(ctx: Ctx) {

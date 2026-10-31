@@ -241,6 +241,19 @@ try {
     const stock = sql(`SELECT business_id, ROUND(SUM(stock_qty * avg_cost)) v FROM products GROUP BY business_id`);
     for (const r of inv) assert.ok(Math.abs(r.v - stock.find((s) => s.business_id === r.business_id).v) <= 1, `inventory ledger matches stock for ${r.business_id}`);
     assert.equal(sql(`SELECT SUM(amount) s FROM journal_lines WHERE account = 'transfer'`)[0].s, 0);
+    // The summary tables the screens read must match the full journal exactly.
+    assert.deepEqual(sql(`SELECT * FROM (SELECT business_id, account, COALESCE(method_id,'') m, COALESCE(customer_id,'') c, COALESCE(supplier_id,'') s, SUM(amount) v
+        FROM journal_lines GROUP BY 1,2,3,4,5) j FULL OUTER JOIN account_balances b USING (business_id, account)
+        WHERE b.method_id = j.m AND b.customer_id = j.c AND b.supplier_id = j.s AND b.balance <> j.v`), [], 'account_balances = journal');
+    assert.equal(sql(`SELECT COUNT(*) n FROM account_balances`)[0].n,
+      sql(`SELECT COUNT(*) n FROM (SELECT 1 FROM journal_lines GROUP BY business_id, account, COALESCE(method_id,''), COALESCE(customer_id,''), COALESCE(supplier_id,''))`)[0].n);
+    assert.deepEqual(sql(`SELECT j.* FROM (SELECT business_id, entry_date, account, entry_type, COALESCE(method_id,'') m, COALESCE(category,'') c,
+        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) d, SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) k FROM journal_lines GROUP BY 1,2,3,4,5,6) j
+        LEFT JOIN daily_totals t ON t.business_id = j.business_id AND t.entry_date = j.entry_date AND t.account = j.account AND t.entry_type = j.entry_type
+          AND t.method_id = j.m AND t.category = j.c
+        WHERE t.debit IS NOT j.d OR t.credit IS NOT j.k`), [], 'daily_totals = journal');
+    assert.equal(sql(`SELECT COUNT(*) n FROM daily_totals`)[0].n,
+      sql(`SELECT COUNT(*) n FROM (SELECT 1 FROM journal_lines GROUP BY business_id, entry_date, account, entry_type, COALESCE(method_id,''), COALESCE(category,''))`)[0].n);
     let blocked = false;
     try { sql('DELETE FROM journal_lines'); } catch { blocked = true; }
     assert.ok(blocked, 'journal is append-only');

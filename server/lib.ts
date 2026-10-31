@@ -207,6 +207,38 @@ export class Tx {
         id, head.business, head.date, head.type, l.account, l.method ?? null, l.customer ?? null, l.supplier ?? null, l.category ?? null, l.amount,
       );
     }
+    // Keep the summary tables (migrations/0002) in step, in the same batch.
+    const balances = new Map<string, { l: Line; amount: number }>();
+    const days = new Map<string, { l: Line; debit: number; credit: number }>();
+    for (const l of kept) {
+      const bk = [l.account, l.method ?? '', l.customer ?? '', l.supplier ?? ''].join('|');
+      const b = balances.get(bk) ?? { l, amount: 0 };
+      b.amount += l.amount;
+      balances.set(bk, b);
+      const dk = [l.account, l.method ?? '', l.category ?? ''].join('|');
+      const d = days.get(dk) ?? { l, debit: 0, credit: 0 };
+      if (l.amount > 0) d.debit += l.amount; else d.credit -= l.amount;
+      days.set(dk, d);
+    }
+    for (const { l, amount } of balances.values()) {
+      const up = amount > 0 ? head.date : null, down = amount < 0 ? head.date : null;
+      this.run(
+        `INSERT INTO account_balances (business_id, account, method_id, customer_id, supplier_id, balance, first_increase, last_increase, last_decrease)
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT DO UPDATE SET balance = balance + excluded.balance,
+           first_increase = CASE WHEN first_increase IS NULL OR excluded.first_increase < first_increase THEN COALESCE(excluded.first_increase, first_increase) ELSE first_increase END,
+           last_increase = CASE WHEN excluded.last_increase > COALESCE(last_increase, '') THEN excluded.last_increase ELSE last_increase END,
+           last_decrease = CASE WHEN excluded.last_decrease > COALESCE(last_decrease, '') THEN excluded.last_decrease ELSE last_decrease END`,
+        head.business, l.account, l.method ?? '', l.customer ?? '', l.supplier ?? '', amount, up, up, down,
+      );
+    }
+    for (const { l, debit, credit } of days.values()) {
+      this.run(
+        `INSERT INTO daily_totals (business_id, entry_date, account, entry_type, method_id, category, debit, credit) VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT DO UPDATE SET debit = debit + excluded.debit, credit = credit + excluded.credit`,
+        head.business, head.date, l.account, head.type, l.method ?? '', l.category ?? '', debit, credit,
+      );
+    }
     return id;
   }
 
