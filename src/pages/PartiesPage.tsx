@@ -80,6 +80,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
         footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
         {statement && (
           <div className="print-area">
+            <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
             <h3 style={{ margin: '0 0 4px' }}>{(statement.customer ?? statement.supplier).name}</h3>
             <p className="muted small">{scope === 'all' ? 'All businesses' : businessName(business)} · balance {money(statement.balance)} {isCustomers ? 'owed to us' : 'we owe'}</p>
             <div className="table-wrap">

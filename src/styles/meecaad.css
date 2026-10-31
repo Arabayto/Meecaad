@@ -15,6 +15,12 @@
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
 
+/* Logo: show the whole mark (the shared shell crops logos to a circle) */
+.brand__logo { border-radius: 0; }
+.brand__logo img { object-fit: contain; border-radius: 0; }
+.receipt-logo { display: block; width: 44px; height: 44px; margin: 0 auto 6px; }
+.print-logo { width: 240px; margin-bottom: 10px; }
+
 /* Business switcher in the sidebar */
 .biz-switch { display: grid; gap: 4px; margin: 0 0 14px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
 .biz-switch__label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-light); padding: 0 4px 2px; }

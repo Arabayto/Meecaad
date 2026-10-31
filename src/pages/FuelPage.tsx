@@ -179,6 +179,7 @@ function ShiftList({ onChange }: { onChange: () => void }) {
         </>}>
         {open && (
           <div className="print-area form-stack">
+            <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
             <h3 className="print-only">Meecaad Fuel Station — shift {open.entry_date} {open.shift_name}</h3>
             {open.status === 'voided' && <div className="mc-error">Cancelled by {open.voided_by_name}: {open.void_reason}</div>}
             {open.meter_gap_note && <div className="mc-error">Meter gap: {open.meter_gap_note}</div>}
@@ -263,7 +264,8 @@ function Reconciliation() {
         <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => window.print()}><Printer size={14} /> Print</button>
       </div>
-      <h3 className="print-only">Fuel reconciliation {from} – {to}</h3>
+      <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
+            <h3 className="print-only">Fuel reconciliation {from} – {to}</h3>
       <ErrorBox error={r.error} />
       {d && (
         <>

@@ -121,6 +121,7 @@ export function ClosingPage() {
         footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
         {view && (
           <div className="print-area form-stack">
+            <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
             <h3 style={{ margin: 0 }}>{view.business_name} — daily closing {view.entry_date}</h3>
             <table>
               <thead><tr><th>Account</th>{COLS.map(([k, l]) => <th key={k} className="num">{l}</th>)}<th className="num">Expected</th><th className="num">Counted</th><th className="num">Difference</th></tr></thead>

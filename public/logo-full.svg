@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1420 400" role="img" aria-label="Meecaad — Restaurant &amp; Cafe · Fuel · Store">
+  <title>Meecaad</title>
+  <g transform="translate(-123 -174) scale(0.6)">
+    <path d="M338 810 V440 L627 800 L916 440 V810" fill="none" stroke="#0B8F08" stroke-width="165" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M627 392 C627 392 533 520 533 588 A94 94 0 0 0 721 588 C721 520 627 392 627 392 Z" fill="#fff" stroke="#fff" stroke-width="46" stroke-linejoin="round"/>
+    <path d="M627 392 C627 392 533 520 533 588 A94 94 0 0 0 721 588 C721 520 627 392 627 392 Z" fill="#F3D400"/>
+  </g>
+  <text x="520" y="215" font-family="Inter, 'Segoe UI', Arial, Helvetica, sans-serif" font-weight="800" font-size="165" letter-spacing="2" fill="#066006">MEECAAD</text>
+  <text x="526" y="300" font-family="Inter, 'Segoe UI', Arial, Helvetica, sans-serif" font-weight="600" font-size="58" fill="#0B8F08">Restaurant &amp; Cafe · Fuel · Store</text>
+</svg>

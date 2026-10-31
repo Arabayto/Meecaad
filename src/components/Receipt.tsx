@@ -5,6 +5,7 @@ import { fmtTime } from './ui';
 export function SaleReceipt({ sale }: { sale: any }) {
   return (
     <div className="receipt print-area">
+      <img className="receipt-logo" src="/logo.svg" alt="" />
       <h3>{sale.business_name}</h3>
       <p className="center small">Receipt #{sale.number} · {fmtTime(sale.created_at)}</p>
       {sale.customer_name && <p className="center small">Customer: {sale.customer_name}</p>}

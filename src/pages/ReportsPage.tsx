@@ -50,7 +50,8 @@ export function ReportsPage() {
             {tab !== 'ledger' && <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />}
           </div>
         </div>
-        <h3 className="print-only">Meecaad — {colName(scope)} — {from} to {to}</h3>
+        <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
+            <h3 className="print-only">Meecaad — {colName(scope)} — {from} to {to}</h3>
         <ErrorBox error={summary.error} />
 
         {tab === 'pnl' && s && (
