@@ -6,10 +6,26 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { fromCents, money, post, toCents } from '../api';
 
+// Screens currently showing the previous selection's data while new data loads.
+// AppShell fades the page a little meanwhile instead of blanking it.
+const refreshing = new Set<object>();
+const listeners = new Set<(on: boolean) => void>();
+function setRefreshing(id: object, on: boolean) {
+  const before = refreshing.size > 0;
+  if (on) refreshing.add(id); else refreshing.delete(id);
+  if (before !== refreshing.size > 0) listeners.forEach((l) => l(refreshing.size > 0));
+}
+export function useRefreshing() {
+  const [on, setOn] = useState(refreshing.size > 0);
+  useEffect(() => { listeners.add(setOn); return () => { listeners.delete(setOn); }; }, []);
+  return on;
+}
+
 /**
- * Loads data and reloads when deps change. Data loaded for other deps (e.g.
- * the previous business or date range) is never returned, and a slow older
- * response can never overwrite a newer one.
+ * Loads data and reloads when deps change. While new data loads, the previous
+ * data stays on screen (marked `stale`) so the page does not jump or blank;
+ * pages that look data up by the selection must use the selection the data
+ * came back with. A slow older response can never overwrite a newer one.
  */
 export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const key = JSON.stringify(deps);
@@ -17,19 +33,22 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(0);
+  const id = useRef({});
   const reload = useCallback(() => {
-    const id = ++latest.current;
+    const req = ++latest.current;
     setLoading(true);
     return fn()
-      .then((d) => { if (id === latest.current) { setState({ key, data: d }); setError(null); } })
-      .catch((e) => { if (id === latest.current) setError(e.message); })
-      .finally(() => { if (id === latest.current) setLoading(false); });
+      .then((d) => { if (req === latest.current) { setState({ key, data: d }); setError(null); } })
+      .catch((e) => { if (req === latest.current) setError(e.message); })
+      .finally(() => { if (req === latest.current) setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   useEffect(() => { reload(); }, [reload]);
-  const data = state.key === key ? state.data : null;
+  const stale = state.data !== null && state.key !== key;
+  useEffect(() => { setRefreshing(id.current, stale); }, [stale]);
+  useEffect(() => () => setRefreshing(id.current, false), []);
   const setData = useCallback((d: T | null) => setState({ key, data: d }), [key]);
-  return { data, loading, error, reload, setData };
+  return { data: state.data, stale, loading, error, reload, setData };
 }
 
 /**
@@ -127,7 +146,7 @@ export function ReasonModal({ open, title, message, action, confirmLabel = 'Conf
 }) {
   const [reason, setReason] = useState('');
   const { run, busy } = useSubmit();
-  useEffect(() => { if (open) setReason(''); }, [open]);
+  useEffect(() => { if (!open) setReason(''); }, [open]);
   const submit = async () => {
     const r = await run((key) => post(action, { reason }, key), 'Saved');
     if (r) { onClose(); onDone(); }

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth, ROLE_LABELS, type Perm } from '../contexts/AuthContext';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { useRefreshing } from '../components/ui';
 
 interface NavItem { label: string; path: string; icon: typeof Home; perms: Perm[]; kinds?: string[] }
 
@@ -38,6 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const refreshing = useRefreshing();
   const kind = businesses.find((b) => b.id === business)?.kind ?? '';
   const items = visibleNav(can, kind);
   const current = NAV.find((n) => (n.path === '/' ? location.pathname === '/' : location.pathname.startsWith(n.path)));
@@ -110,7 +112,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
-        <div className="main-content"><ErrorBoundary resetKey={location.pathname + business}>{children}</ErrorBoundary></div>
+        <div className={`main-content${refreshing ? ' is-refreshing' : ''}`}><ErrorBoundary resetKey={location.pathname + business}>{children}</ErrorBoundary></div>
       </main>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ClipboardCheck, Lock, Printer } from 'lucide-react';
 import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,13 +16,17 @@ export function ClosingPage() {
   const [date, setDate] = useState(today);
   const preview = useLoad(() => get('/closing/preview', { business, date }), [business, date]);
   const history = useLoad(() => get('/closing', { business: can('reports') ? 'all' : business }), [business]);
-  const [counted, setCounted] = useState<Record<string, string>>({});
-  const [explanation, setExplanation] = useState('');
+  // Counted amounts belong to one business and day; a new selection starts empty in the same render.
+  const formKey = `${business}|${date}`;
+  const [form, setForm] = useState({ key: formKey, counted: {} as Record<string, string>, explanation: '' });
+  const current = form.key === formKey ? form : { key: formKey, counted: {} as Record<string, string>, explanation: '' };
+  const counted = current.counted;
+  const explanation = current.explanation;
+  const setCounted = (c: Record<string, string>) => setForm({ ...current, counted: c });
+  const setExplanation = (e: string) => setForm({ ...current, explanation: e });
   const [view, setView] = useState<any>(null);
   const [reopen, setReopen] = useState<any>(null);
   const { run, busy } = useSubmit();
-
-  useEffect(() => { setCounted({}); setExplanation(''); }, [business, date]);
 
   const p = preview.data;
   const lines = p?.lines ?? [];
@@ -86,7 +90,7 @@ export function ClosingPage() {
                   <textarea className="form-textarea" rows={2} value={explanation} onChange={(e) => setExplanation(e.target.value)} />
                 </Field>
                 <div className="form-actions">
-                  <button type="button" className="btn btn-primary" disabled={busy || !allCounted || (anyDiff && !explanation.trim())} onClick={close}>Close the day {date}</button>
+                  <button type="button" className="btn btn-primary" disabled={busy || preview.stale || preview.loading || !allCounted || (anyDiff && !explanation.trim())} onClick={close}>Close the day {date}</button>
                 </div>
               </div>
             )}

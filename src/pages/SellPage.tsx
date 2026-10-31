@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Printer, Search, ShoppingCart, Trash2 } from 'lucide-react';
 import { get, money, num, post, toCents, fromCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,14 +17,12 @@ export function SellPage() {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [discount, setDiscount] = useState('');
   const [customer, setCustomer] = useState('');
-  const [payments, setPayments] = useState<PayLine[]>([{ method: 'cash', amount: '' }]);
+  const [payLines, setPayLines] = useState<PayLine[]>([{ method: 'cash', amount: '' }]);
   const [payTouched, setPayTouched] = useState(false);
   const [given, setGiven] = useState('');
   const [note, setNote] = useState('');
   const [receipt, setReceipt] = useState<any>(null);
   const { run, busy } = useSubmit();
-
-  useEffect(() => { setCart([]); setCustomer(''); setCategory(''); }, [business]);
 
   const sellable = (products.data ?? []).filter((p: any) => p.active && (p.kind === 'menu' || p.kind === 'item'));
   const categories = [...new Set(sellable.map((p: any) => p.category).filter(Boolean))] as string[];
@@ -33,15 +31,13 @@ export function SellPage() {
 
   const subtotal = useMemo(() => cart.reduce((s, l) => s + Math.round(l.qty * l.product.sale_price), 0), [cart]);
   const total = Math.max(0, subtotal - toCents(discount));
+  // While one payment method covers the whole sale, its amount IS the total
+  // (worked out in the same render, so there is never a frame where the sale
+  // looks part-paid). Typing a different amount or splitting the payment
+  // keeps exactly what was typed.
+  const payments: PayLine[] = payTouched ? payLines : [{ method: payLines[0]?.method ?? 'cash', amount: total ? fromCents(total) : '' }];
   const paid = payments.reduce((s, p) => s + toCents(p.amount), 0);
   const credit = total - paid;
-
-  // While one payment method covers the whole sale, its amount follows the total
-  // (changing Cash → Zaad keeps it in step). Typing a different amount or
-  // splitting the payment stops that, so a part payment is never overwritten.
-  useEffect(() => {
-    if (!payTouched) setPayments((p) => [{ method: p[0]?.method ?? 'cash', amount: total ? fromCents(total) : '' }]);
-  }, [total, payTouched]);
 
   const add = (p: any) => setCart((c) => {
     const i = c.findIndex((l) => l.product.id === p.id);
@@ -60,7 +56,7 @@ export function SellPage() {
     }, key), 'Sale saved');
     if (r) {
       setReceipt(await get(`/sales/${r.id}`));
-      setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false); setPayments([{ method: 'cash', amount: '' }]);
+      setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false); setPayLines([{ method: 'cash', amount: '' }]);
       products.reload(); customers.reload();
     }
   };
@@ -119,7 +115,7 @@ export function SellPage() {
           <Field label="Discount"><MoneyInput value={discount} onChange={setDiscount} /></Field>
           <div className="cart-total"><span>Total</span><span>{money(total)}</span></div>
           <Field label="Payment">
-            <PaymentsEditor value={payments} total={total} onChange={(v) => { setPayTouched(!(v.length === 1 && toCents(v[0].amount) === total)); setPayments(v); }} />
+            <PaymentsEditor value={payments} total={total} onChange={(v) => { setPayTouched(!(v.length === 1 && toCents(v[0].amount) === total)); setPayLines(v); }} />
           </Field>
           {credit > 0 && (
             <div className={customer ? 'mc-warn' : 'mc-error'}>

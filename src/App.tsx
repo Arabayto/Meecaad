@@ -29,6 +29,12 @@ function Protected() {
   return <AppShell><Outlet /></AppShell>;
 }
 
+/** Each business has its own till: switching business starts a fresh one (no old cart for a frame). */
+function SellForBusiness() {
+  const { business } = useAuth();
+  return <SellPage key={business} />;
+}
+
 /** Renders the page only for users holding one of the permissions. */
 function Need({ perms, children }: { perms: Perm[]; children: JSX.Element }) {
   const { can } = useAuth();
@@ -51,7 +57,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route element={<Protected />}>
           <Route path="/" element={<Home />} />
-          <Route path="/sell" element={<Need perms={['sell']}><SellPage /></Need>} />
+          <Route path="/sell" element={<Need perms={['sell']}><SellForBusiness /></Need>} />
           <Route path="/sales" element={<Need perms={['sell', 'reports']}><SalesPage /></Need>} />
           <Route path="/fuel" element={<Need perms={['fuel', 'reports']}><FuelPage /></Need>} />
           <Route path="/stock" element={<Need perms={['stock', 'catalog']}><StockPage /></Need>} />

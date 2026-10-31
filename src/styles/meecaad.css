@@ -21,6 +21,11 @@
 .receipt-logo { display: block; width: 44px; height: 44px; margin: 0 auto 6px; }
 .print-logo { width: 240px; margin-bottom: 10px; }
 
+/* While a screen loads data for a new selection, keep it in place and fade it slightly
+   (only if the load takes a moment), instead of blanking it. */
+.main-content > * { transition: opacity 0.15s ease; }
+.main-content.is-refreshing > * { opacity: 0.6; transition-delay: 0.15s; }
+
 /* Business switcher in the sidebar */
 .biz-switch { display: grid; gap: 4px; margin: 0 0 14px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
 .biz-switch__label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-light); padding: 0 4px 2px; }

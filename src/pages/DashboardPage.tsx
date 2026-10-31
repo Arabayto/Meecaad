@@ -37,7 +37,9 @@ export function DashboardPage() {
   if (loading && !d) return <PageSkeleton />;
   if (!d) return <ErrorBox error={error} />;
 
-  const key = scope === 'all' ? 'all' : scope;
+  // Draw from the selection the data was loaded for (the tabs above already show the new choice).
+  const view: string = d.business;
+  const key = view;
   const now: Pnl = d.figures[period.key][key];
   const before: Pnl = d.figures[period.vs][key];
   const sumBy = (rows: any[], field = 'total') => rows.reduce((s, r) => s + (r[field] ?? 0), 0);
@@ -53,7 +55,7 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard">
-      <PageHeader icon={<LayoutDashboard size={22} />} title={scope === 'all' ? 'All businesses' : businessName(scope)}
+      <PageHeader icon={<LayoutDashboard size={22} />} title={view === 'all' ? 'All businesses' : businessName(view)}
         subtitle={`Owner overview · ${d.today}`}
         actions={<button type="button" className="btn btn-secondary btn-sm" onClick={() => reload()}><RefreshCw size={14} /> Refresh</button>} />
 
@@ -85,7 +87,7 @@ export function DashboardPage() {
           sub={`Paid out ${money(moneyOut)}: expenses ${money(outBy(['expense']))}, stock & suppliers ${money(outBy(['purchase', 'supplier_payment']))}`} />
       </section>
 
-      {scope === 'all' && (
+      {view === 'all' && (
         <section className="biz-cards">
           {businesses.map((b) => {
             const Icon = ICONS[b.kind];
@@ -189,7 +191,7 @@ export function DashboardPage() {
 
       <section className="panel">
         <div className="panel__header">
-          <div><p>Recent activity</p><h2>Latest transactions {scope === 'all' ? 'from all businesses' : `· ${businessName(scope)}`}</h2></div>
+          <div><p>Recent activity</p><h2>Latest transactions {view === 'all' ? 'from all businesses' : `· ${businessName(view)}`}</h2></div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate('/reports?tab=ledger')}>All transactions</button>
         </div>
         <div className="table-wrap">

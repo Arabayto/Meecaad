@@ -29,7 +29,9 @@ export function ReportsPage() {
   const [to, setTo] = useState(today);
   const summary = useLoad(() => (tab === 'ledger' ? Promise.resolve(null) : get('/reports/summary', { business: scope, from, to })), [scope, from, to, tab === 'ledger']);
   const s = summary.data;
-  const cols = scope === 'all' ? [...businesses.map((b) => b.id), 'all'] : [scope];
+  // Columns follow the selection the data was loaded for, so a new choice never meets old data.
+  const view: string = s?.business ?? scope;
+  const cols = view === 'all' ? [...businesses.map((b) => b.id), 'all'] : [view];
   const colName = (c: string) => (c === 'all' ? 'All businesses' : businessName(c));
 
   return (
@@ -51,7 +53,7 @@ export function ReportsPage() {
           </div>
         </div>
         <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
-            <h3 className="print-only">Meecaad — {colName(scope)} — {from} to {to}</h3>
+            <h3 className="print-only">Meecaad — {colName(view)} — {s?.from ?? from} to {s?.to ?? to}</h3>
         <ErrorBox error={summary.error} />
 
         {tab === 'pnl' && s && (

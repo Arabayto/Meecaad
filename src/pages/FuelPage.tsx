@@ -97,7 +97,7 @@ function ShiftForm({ setup, onSaved }: { setup: any; onSaved: () => void }) {
               <tr key={r.p.id}>
                 <td><strong>{r.p.name}</strong><div className="small muted">{r.p.tank_name}</div></td>
                 <td>{r.p.fuel_name}</td>
-                <td><input className="form-input" inputMode="decimal" style={{ width: 130 }} value={opening[r.p.id] ?? ''} onChange={(e) => setOpening({ ...opening, [r.p.id]: e.target.value })} />
+                <td><input className="form-input" inputMode="decimal" style={{ width: 130 }} value={opening[r.p.id] ?? String(r.p.last_meter)} onChange={(e) => setOpening({ ...opening, [r.p.id]: e.target.value })} />
                   {r.gap && <div className="small" style={{ color: '#b91c1c' }}>Last closing was {num(r.p.last_meter)}</div>}</td>
                 <td><input className="form-input" inputMode="decimal" style={{ width: 130 }} value={closing[r.p.id] ?? ''} onChange={(e) => setClosing({ ...closing, [r.p.id]: e.target.value })} placeholder="Read the meter" />
                   {r.bad && <div className="small" style={{ color: '#b91c1c' }}>Lower than opening</div>}</td>

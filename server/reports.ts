@@ -117,7 +117,7 @@ export async function dashboard(ctx: Ctx) {
     all(ctx.db, `SELECT business_id, MAX(entry_date) AS last_closed FROM daily_closings WHERE status = 'closed' AND business_id IN (${p}) GROUP BY business_id`, ...scope),
     buildAlerts(ctx.db, scope),
   ]);
-  return { today: t, periods: ps, scope, figures, cash, receivable, payable, inventory, flow, activity, closings, alerts };
+  return { business: ctx.url.searchParams.get('business') || 'all', today: t, periods: ps, scope, figures, cash, receivable, payable, inventory, flow, activity, closings, alerts };
 }
 
 async function buildAlerts(db: D1Database, scope: string[]) {
@@ -207,7 +207,7 @@ export async function summary(ctx: Ctx) {
     all(ctx.db, `SELECT business_id, SUM(debit) AS given, SUM(credit) AS collected
                  FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'receivable' GROUP BY business_id`, ...scope, from, to),
   ]);
-  return { from, to, scope, profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit };
+  return { business: ctx.url.searchParams.get('business') || 'all', from, to, scope, profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit };
 }
 
 function requireBizRead(ctx: Ctx) {
