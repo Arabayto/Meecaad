@@ -19,6 +19,11 @@ const wrangler = (...args) => execFileSync('npx', ['wrangler', ...args], { stdio
 // No migration step: the app must create its own schema on the first request.
 const sql = (q) => JSON.parse(wrangler('d1', 'execute', 'meecaad', '--local', '--persist-to', persist, '--json', '--command', q))[0].results;
 
+// A server left over from an interrupted run would answer with its old database.
+if (await fetch(`${BASE}/auth/me`).then(() => true, () => false)) {
+  console.error(`Port ${PORT} is already in use (a leftover test server?). Stop it and run again.`);
+  process.exit(1);
+}
 const server = spawn('npx', ['wrangler', 'pages', 'dev', 'dist', '--port', String(PORT), '--ip', '127.0.0.1', '--persist-to', persist], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1' } });
 let log = '';
 server.stdout.on('data', (d) => (log += d));
@@ -81,8 +86,11 @@ try {
   });
 
   await step('setup: customer, supplier, products with opening stock, owner money', async () => {
-    customer = (await owner.post('/customers', { name: 'Ahmed Ali', phone: '063' })).id;
-    supplier = (await owner.post('/suppliers', { name: 'Berbera Traders' })).id;
+    customer = (await owner.post('/customers', { business: 'store', name: 'Ahmed Ali', phone: '063' })).id;
+    supplier = (await owner.post('/suppliers', { business: 'store', name: 'Berbera Traders' })).id;
+    // The same person/company also deals with the fuel station: the owner shares the record (no duplicate).
+    await owner.ok('PATCH', `/customers/${customer}`, { businesses: ['store', 'fuel'] });
+    await owner.ok('PATCH', `/suppliers/${supplier}`, { businesses: ['store', 'fuel'] });
     rice = (await owner.post('/products', { business: 'store', name: 'Rice 25kg', kind: 'item', salePrice: 2500, openingQty: 10, openingCost: 2000, reorderLevel: 3 })).id;
     tea = (await owner.post('/products', { business: 'restaurant', name: 'Tea', kind: 'menu', salePrice: 50 })).id;
     sugar = (await owner.post('/products', { business: 'restaurant', name: 'Sugar', kind: 'ingredient', unit: 'kg', openingQty: 10, openingCost: 100 })).id;
@@ -222,7 +230,7 @@ try {
   });
 
   await step('permissions: cashier limited to own business and actions', async () => {
-    await owner.post('/users', { fullName: 'Cashier', username: 'cashier1', password: 'cashier-pass', role: 'cashier', businesses: ['restaurant'] });
+    await owner.post('/users', { fullName: 'Cashier', username: 'cashier1', password: 'cashier-pass', access: { restaurant: 'cashier' } });
     const c = client();
     await c.post('/auth/login', { username: 'cashier1', password: 'cashier-pass' });
     assert.equal((await c.call('GET', '/dashboard')).status, 403);
@@ -231,6 +239,53 @@ try {
     await c.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
     const sale = (await owner.get('/sales?business=restaurant'))[0];
     assert.equal((await c.call('POST', `/sales/${sale.id}/void`, { reason: 'x' })).status, 403, 'cashier cannot cancel sales');
+  });
+
+  await step('business separation: each business only reaches its own customers, suppliers, data and pages', async () => {
+    const restCust = (await owner.post('/customers', { business: 'restaurant', name: 'Restaurant regular' })).id;
+    const fuelSup = (await owner.post('/suppliers', { business: 'fuel', name: 'Fuel depot' })).id;
+    await owner.post('/sales', { business: 'restaurant', customer: restCust, items: [{ product: tea, qty: 2 }], payments: [] });
+    await owner.post('/users', { fullName: 'Store cashier', username: 'storecash', password: 'store-pass-1', access: { store: 'cashier' } });
+    const sc = client();
+    await sc.post('/auth/login', { username: 'storecash', password: 'store-pass-1' });
+    // Lists only show this business's records.
+    assert.ok(!(await sc.get('/customers?business=store')).some((c) => c.id === restCust), 'restaurant customer hidden from store');
+    assert.ok((await sc.get('/customers?business=store')).some((c) => c.id === customer), 'store customer visible');
+    assert.equal((await sc.call('GET', '/suppliers?business=fuel')).status, 403);
+    assert.ok(!(await owner.get('/suppliers?business=store')).some((x) => x.id === fuelSup), 'fuel supplier not in store list');
+    // Direct API attempts across the boundary are refused by the server.
+    const denied = [
+      ['PATCH', `/customers/${restCust}`, { name: 'renamed by store' }],
+      ['GET', `/customers/${restCust}/statement?business=store`],
+      ['POST', '/sales', { business: 'store', customer: restCust, items: [{ product: rice, qty: 1 }], payments: [] }],
+      ['GET', '/products?business=restaurant'], ['GET', '/sales?business=fuel'], ['GET', '/fuel/setup'], ['GET', '/fuel/shifts'],
+      ['POST', '/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] }],
+      ['POST', '/sales', { business: 'store', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] }],
+      ['POST', '/customers', { business: 'restaurant', name: 'x' }],
+      ['GET', '/dashboard?business=store'], ['GET', '/reports/summary?business=store'], ['GET', '/closing?business=restaurant'],
+      ['POST', '/purchases', { business: 'store', items: [{ product: rice, qty: 1, total: 100 }], paid: 100, method: 'cash' }],
+    ];
+    for (const [m, path, body] of denied) {
+      const r = await sc.call(m, path, body);
+      assert.ok([400, 403, 404].includes(r.status), `${m} ${path} should be refused, got ${r.status}`);
+    }
+    assert.equal((await owner.get(`/customers/${restCust}/statement?business=restaurant`)).balance, 100, 'restaurant debt intact');
+    // Owner products/purchases cannot cross either.
+    assert.equal((await owner.call('POST', '/purchases', { business: 'fuel', supplier: customer, items: [{ product: rice, qty: 1, total: 1 }], paid: 0 })).status, 400);
+    assert.equal((await owner.call('POST', '/products', { business: 'fuel', name: 'Cooking oil', kind: 'item' })).status, 400);
+    // One person, different roles: manager in the store, cashier in the restaurant.
+    await owner.post('/users', { fullName: 'Two roles', username: 'tworoles', password: 'two-roles-1', access: { store: 'manager', restaurant: 'cashier' } });
+    const tr = client();
+    await tr.post('/auth/login', { username: 'tworoles', password: 'two-roles-1' });
+    const me = await tr.get('/bootstrap');
+    assert.deepEqual(me.user.roles, { restaurant: 'cashier', store: 'manager' });
+    assert.equal((await tr.call('GET', '/dashboard?business=store')).status, 200, 'manager sees the store dashboard');
+    assert.equal((await tr.call('GET', '/dashboard?business=restaurant')).status, 403, 'cashier does not see the restaurant dashboard');
+    assert.deepEqual((await tr.get('/dashboard?business=all')).scope, ['store'], 'combined view only covers businesses with report access');
+    await tr.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
+    assert.equal((await tr.call('POST', '/expenses', { business: 'restaurant', category: 'x', amount: 100, method: 'cash' })).status, 403);
+    assert.equal((await tr.call('GET', '/fuel/setup')).status, 403);
+    assert.equal((await tr.call('GET', '/users')).status, 403);
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

@@ -4,7 +4,7 @@
 
 import {
   HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, placeholders,
-  qty, requireBiz, round3, str, today, type Ctx, type Line,
+  partyIn, qty, requireBiz, round3, str, today, type Ctx, type Line,
 } from './lib';
 
 /** Weighted-average cost update, run before stock is added (or removed with negative qty). */
@@ -20,12 +20,6 @@ async function supplierBalance(db: D1Database, business: string, supplier: strin
   const r = await first<{ b: number }>(db, `SELECT COALESCE(-SUM(balance), 0) AS b FROM account_balances WHERE business_id = ? AND account = 'payable' AND method_id = '' AND customer_id = '' AND supplier_id = ?`, business, supplier);
   return r?.b ?? 0;
 }
-async function existing(db: D1Database, table: string, id: unknown, label: string) {
-  if (!id) return null;
-  const row = await first<any>(db, `SELECT id, name FROM ${table} WHERE id = ? AND active = 1`, String(id));
-  if (!row) throw bad(`${label} not found`);
-  return row as { id: string; name: string };
-}
 
 function dateRange(ctx: Ctx) {
   const from = ctx.url.searchParams.get('from') || today(-30);
@@ -39,7 +33,6 @@ export async function createSale(ctx: Ctx) {
   const business = requireBiz(ctx, b.business, 'sell');
   if (business === 'fuel') throw bad('Fuel sales are recorded from pump meter readings');
   const date = entryDate(b.date);
-  await assertDayOpen(ctx.db, business, date);
   const items = Array.isArray(b.items) ? b.items : [];
   if (!items.length) throw bad('Add at least one item');
   const products = await all<any>(ctx.db, `SELECT * FROM products WHERE business_id = ? AND active = 1 AND kind IN ('menu', 'item') AND id IN (${placeholders(items)})`,
@@ -63,8 +56,9 @@ export async function createSale(ctx: Ctx) {
   const paid = payments.reduce((s, p) => s + p.amount, 0);
   if (paid > total) throw bad('Payments are more than the sale total. Enter only the amount kept (give the change back).');
   const credit = total - paid;
-  const customer = await existing(ctx.db, 'customers', b.customer, 'Customer');
+  const customer = await partyIn(ctx.db, 'customer', b.customer, business);
   if (credit > 0 && !customer) throw bad(`Choose the customer who owes the unpaid ${(credit / 100).toFixed(2)}`);
+  await assertDayOpen(ctx.db, business, date);
   const costTotal = lines.reduce((s: number, l: any) => s + l.cost, 0);
 
   const id = newId();
@@ -226,7 +220,7 @@ export async function createPurchase(ctx: Ctx) {
   const paid = cents(b.paid ?? 0, 'Amount paid');
   if (paid > total) throw bad('Amount paid is more than the purchase total');
   const method = paid > 0 ? await paymentMethod(ctx.db, b.method) : null;
-  const supplier = await existing(ctx.db, 'suppliers', b.supplier, 'Supplier');
+  const supplier = await partyIn(ctx.db, 'supplier', b.supplier, business);
   if (paid < total && !supplier) throw bad('Choose the supplier for the unpaid amount');
 
   const id = newId();
@@ -250,7 +244,7 @@ export async function createPurchase(ctx: Ctx) {
 }
 
 export async function listPurchases(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'purchase');
   const { from, to } = dateRange(ctx);
   return all(ctx.db,
     `SELECT pu.*, s.name AS supplier_name, pm.name AS method_name, u.full_name AS created_by_name,
@@ -287,7 +281,7 @@ export async function createExpense(ctx: Ctx) {
   const amount = cents(b.amount, 'Amount', { min: 1 });
   const category = str(b.category, 'Category', { required: true, max: 60 })!;
   const method = b.method ? await paymentMethod(ctx.db, b.method) : null;
-  const supplier = await existing(ctx.db, 'suppliers', b.supplier, 'Supplier');
+  const supplier = await partyIn(ctx.db, 'supplier', b.supplier, business);
   if (!method && !supplier) throw bad('Choose how it was paid, or the supplier it is owed to');
   const description = str(b.description, 'Description', { max: 300 });
   const id = newId();
@@ -303,7 +297,7 @@ export async function createExpense(ctx: Ctx) {
 }
 
 export async function listExpenses(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'expense');
   const { from, to } = dateRange(ctx);
   return all(ctx.db,
     `SELECT e.*, pm.name AS method_name, s.name AS supplier_name, u.full_name AS created_by_name
@@ -333,7 +327,8 @@ export async function createMovement(ctx: Ctx) {
   const b = ctx.body;
   const type = String(b.type) as keyof typeof MOVEMENT_PERM;
   if (!MOVEMENT_PERM[type]) throw bad('Unknown money movement');
-  const business = requireBiz(ctx, b.business, MOVEMENT_PERM[type]);
+  // At the fuel station, debts are collected by the fuel staff (there is no till there).
+  const business = requireBiz(ctx, b.business, type === 'customer_payment' && b.business === 'fuel' ? 'fuel' : MOVEMENT_PERM[type]);
   const date = entryDate(b.date);
   await assertDayOpen(ctx.db, business, date);
   const amount = cents(b.amount, 'Amount', { min: 1 });
@@ -345,14 +340,14 @@ export async function createMovement(ctx: Ctx) {
   let customer = null, supplier = null, toBusiness = null, toMethod = null;
 
   if (type === 'customer_payment') {
-    customer = await existing(ctx.db, 'customers', b.customer, 'Customer');
+    customer = await partyIn(ctx.db, 'customer', b.customer, business);
     if (!customer) throw bad('Choose the customer');
     const owed = await customerBalance(ctx.db, business, customer.id);
     if (amount > owed) throw bad(`${customer.name} owes only ${(owed / 100).toFixed(2)} to this business`);
     tx.journal({ ...head, memo: `Debt payment from ${customer.name}${note ? ` — ${note}` : ''}` },
       [{ account: 'cash', amount, method }, { account: 'receivable', amount: -amount, customer: customer.id }]);
   } else if (type === 'supplier_payment') {
-    supplier = await existing(ctx.db, 'suppliers', b.supplier, 'Supplier');
+    supplier = await partyIn(ctx.db, 'supplier', b.supplier, business);
     if (!supplier) throw bad('Choose the supplier');
     const owed = await supplierBalance(ctx.db, business, supplier.id);
     if (amount > owed) throw bad(`This business owes ${supplier.name} only ${(owed / 100).toFixed(2)}`);
@@ -384,7 +379,7 @@ export async function createMovement(ctx: Ctx) {
 }
 
 export async function listMovements(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'money');
   const { from, to } = dateRange(ctx);
   const type = ctx.url.searchParams.get('type');
   return all(ctx.db,

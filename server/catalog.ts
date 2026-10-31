@@ -2,7 +2,7 @@
 
 import {
   HttpError, Tx, all, bad, bizScope, bool, can, cents, entryDate, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, round3, str,
-  assertDayOpen, today, type Ctx,
+  assertDayOpen, today, BUSINESSES, type Ctx, type Perm,
 } from './lib';
 
 const KINDS: Record<string, string[]> = { restaurant: ['menu', 'ingredient'], store: ['item'], fuel: ['fuel'] };
@@ -115,13 +115,20 @@ export async function stockMovements(ctx: Ctx) {
 }
 
 // ── Customers & suppliers ───────────────────────────────────────
+// Each customer/supplier belongs to the business(es) it is linked to
+// (customer_businesses / supplier_businesses). Lists, edits and statements
+// only reach the businesses the user works in AND the record is linked to.
 function party(kind: 'customer' | 'supplier') {
   const table = kind === 'customer' ? 'customers' : 'suppliers';
+  const links = `${kind}_businesses`;
   const account = kind === 'customer' ? 'receivable' : 'payable';
   const col = `${kind}_id`;
   const sign = kind === 'customer' ? 1 : -1;
   // Fuel attendants add the customers they give fuel on credit to.
-  const allowed = (ctx: Ctx) => (kind === 'customer' ? can(ctx.user, 'sell') || can(ctx.user, 'fuel') : can(ctx.user, 'purchase'));
+  const perms: Perm[] = kind === 'customer' ? ['sell', 'fuel', 'reports'] : ['purchase', 'expense', 'reports'];
+  const mayManage = (ctx: Ctx, business: string) => perms.some((p) => can(ctx.user, p, business));
+  const linkedTo = async (ctx: Ctx, id: string) =>
+    (await all<{ business_id: string }>(ctx.db, `SELECT business_id FROM ${links} WHERE ${col} = ?`, id)).map((r) => r.business_id);
 
   return {
     async list(ctx: Ctx) {
@@ -129,40 +136,63 @@ function party(kind: 'customer' | 'supplier') {
       // Balances come from the running totals (account_balances), not the full history.
       // A charge raises a customer's balance but lowers a supplier's (amounts are + debit / − credit).
       const [charge, payment] = kind === 'customer' ? ['last_increase', 'last_decrease'] : ['last_decrease', 'last_increase'];
-      return all(ctx.db,
-        `SELECT c.*, COALESCE(b.balance, 0) AS balance, b.last_charge, b.last_payment
-         FROM ${table} c LEFT JOIN (
+      const rows = await all<any>(ctx.db,
+        `SELECT c.*, COALESCE(b.balance, 0) AS balance, b.last_charge, b.last_payment,
+                (SELECT GROUP_CONCAT(x.business_id) FROM ${links} x WHERE x.${col} = c.id) AS business_list
+         FROM ${table} c
+         LEFT JOIN (
            SELECT ${col} AS id, ${sign} * SUM(balance) AS balance, MAX(${charge}) AS last_charge, MAX(${payment}) AS last_payment
            FROM account_balances WHERE account = '${account}' AND business_id IN (${placeholders(scope)}) GROUP BY ${col}
          ) b ON b.id = c.id
-         ORDER BY c.active DESC, c.name`, ...scope);
+         WHERE c.id IN (SELECT ${col} FROM ${links} WHERE business_id IN (${placeholders(scope)}))
+         ORDER BY c.active DESC, c.name`, ...scope, ...scope);
+      for (const r of rows) r.businesses = String(r.business_list ?? '').split(',').filter(Boolean);
+      return rows;
     },
     async create(ctx: Ctx) {
-      if (!allowed(ctx)) throw new HttpError(403, 'You do not have permission for this action');
+      const business = String(ctx.body.business ?? '');
+      requireBiz(ctx, business, perms.find((p) => can(ctx.user, p, business)) ?? perms[0]);
       const id = newId();
       const tx = new Tx(ctx.db, ctx.user);
       tx.run(`INSERT INTO ${table} (id, name, phone, notes, created_at, created_by) VALUES (?,?,?,?,?,?)`,
         id, str(ctx.body.name, 'Name', { required: true, max: 120 }), str(ctx.body.phone, 'Phone', { max: 40 }), str(ctx.body.notes, 'Notes', { max: 500 }), nowIso(), ctx.user.id);
-      tx.audit('create', kind, id, null, { name: ctx.body.name });
+      tx.run(`INSERT INTO ${links} (${col}, business_id) VALUES (?,?)`, id, business);
+      tx.audit('create', kind, id, business, { name: ctx.body.name });
       return tx.commit(idemKey(ctx), { id });
     },
     async update(ctx: Ctx) {
-      if (!allowed(ctx)) throw new HttpError(403, 'You do not have permission for this action');
       const c = await first<any>(ctx.db, `SELECT * FROM ${table} WHERE id = ?`, ctx.params.id);
       if (!c) throw new HttpError(404, 'Not found');
+      const linked = await linkedTo(ctx, c.id);
+      // Only someone working in a business this record belongs to may change it.
+      if (!linked.some((b) => ctx.user.businesses.includes(b) && mayManage(ctx, b))) throw new HttpError(404, 'Not found');
       const b = ctx.body;
       const tx = new Tx(ctx.db, ctx.user);
       tx.run(`UPDATE ${table} SET name = ?, phone = ?, notes = ?, active = ? WHERE id = ?`,
         str(b.name ?? c.name, 'Name', { required: true, max: 120 }), str(b.phone ?? c.phone, 'Phone', { max: 40 }),
         str(b.notes ?? c.notes, 'Notes', { max: 500 }), b.active === undefined ? c.active : bool(b.active) ? 1 : 0, c.id);
-      tx.audit('update', kind, c.id, null, { before: c, after: b });
+      // The owner can share a record with another business, or remove it from one where nothing is owed.
+      if (Array.isArray(b.businesses)) {
+        if (!ctx.user.owner) throw new HttpError(403, 'Only the owner can change which businesses this belongs to');
+        const next = [...new Set<string>(b.businesses.map(String))].filter((x) => BUSINESSES.includes(x));
+        if (!next.length) throw bad('Choose at least one business');
+        for (const gone of linked.filter((x) => !next.includes(x))) {
+          const owed = await first<{ v: number }>(ctx.db, `SELECT COALESCE(SUM(balance), 0) AS v FROM account_balances WHERE business_id = ? AND account = '${account}' AND ${col} = ?`, gone, c.id);
+          if (owed?.v) throw bad(`Cannot remove it from ${gone}: there is still a balance there`);
+          tx.run(`DELETE FROM ${links} WHERE ${col} = ? AND business_id = ?`, c.id, gone);
+        }
+        for (const add of next.filter((x) => !linked.includes(x))) tx.run(`INSERT INTO ${links} (${col}, business_id) VALUES (?,?)`, c.id, add);
+      }
+      tx.audit('update', kind, c.id, null, { before: { ...c, businesses: linked }, after: b });
       return tx.commit(null, { id: c.id });
     },
-    /** Every charge and payment with a running balance. */
+    /** Every charge and payment with a running balance, in the businesses asked for. */
     async statement(ctx: Ctx) {
-      const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
       const c = await first<any>(ctx.db, `SELECT * FROM ${table} WHERE id = ?`, ctx.params.id);
       if (!c) throw new HttpError(404, 'Not found');
+      const linked = await linkedTo(ctx, c.id);
+      const scope = bizScope(ctx, ctx.url.searchParams.get('business')).filter((b) => linked.includes(b));
+      if (!scope.length) throw new HttpError(404, 'Not found');
       const lines = await all<any>(ctx.db,
         `SELECT l.entry_date, l.business_id, ${sign} * l.amount AS amount, e.memo, e.type, e.ref_type, e.ref_id, e.created_at
          FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id

@@ -6,7 +6,7 @@
 // on credit. Any gap is a visible shortage/overage that needs a reason.
 
 import {
-  HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, qty, requireBiz, round3, str, today,
+  HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, partyIn, qty, requireBiz, round3, str, today,
   type Ctx, type Line,
 } from './lib';
 
@@ -43,8 +43,8 @@ export async function createShift(ctx: Ctx) {
   for (const c of Array.isArray(b.credits) ? b.credits : []) {
     const amount = cents(c.amount, 'Credit amount', { required: false });
     if (amount <= 0) continue;
-    const cust = await first<any>(ctx.db, 'SELECT id, name FROM customers WHERE id = ? AND active = 1', String(c.customer ?? ''));
-    if (!cust) throw bad('Choose the customer for each credit sale');
+    if (!c.customer) throw bad('Choose the customer for each credit sale');
+    const cust = (await partyIn(ctx.db, 'customer', c.customer, business))!;
     credits.push({ customer: cust.id, name: cust.name, amount });
   }
   const expected = readings.reduce((s: number, r: any) => s + r.amount, 0);

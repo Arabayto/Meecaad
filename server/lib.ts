@@ -3,7 +3,8 @@
 
 export interface Env { DB: D1Database }
 
-export type Role = 'owner' | 'manager' | 'cashier' | 'restaurant_staff' | 'fuel_staff' | 'store_staff';
+export type Role = 'owner' | 'manager' | 'cashier' | 'restaurant_staff' | 'fuel_staff' | 'store_staff';   // users.role (owner flag + history)
+export type BizRole = 'manager' | 'cashier' | 'staff';                                                        // role inside one business
 export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'money' | 'reports' | 'users';
 
 export interface User {
@@ -11,7 +12,9 @@ export interface User {
   username: string;
   full_name: string;
   role: Role;
-  businesses: string[];
+  owner: boolean;
+  businesses: string[];                       // businesses this user may open
+  roles: Record<string, BizRole | 'owner'>;   // role in each of them
 }
 
 export interface Ctx {
@@ -29,38 +32,64 @@ export class HttpError extends Error {
 export const bad = (message: string) => new HttpError(400, message);
 
 // ── Roles ───────────────────────────────────────────────────────
-export const ROLE_PERMS: Record<Role, Perm[]> = {
-  owner: ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
-  manager: ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
-  cashier: ['sell', 'close'],
-  restaurant_staff: ['sell', 'stock'],
-  store_staff: ['sell', 'stock'],
-  fuel_staff: ['fuel'],
-};
-export const STAFF_BUSINESS: Partial<Record<Role, string>> = {
-  restaurant_staff: 'restaurant', fuel_staff: 'fuel', store_staff: 'store',
-};
 export const BUSINESSES = ['restaurant', 'fuel', 'store'];
+const ALL: Perm[] = ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'];
 
-export function can(user: User, perm: Perm) {
-  return ROLE_PERMS[user.role].includes(perm);
+/** What each role may do, per kind of business. The fuel station has no till; its sales are pump readings. */
+export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
+  manager: {
+    restaurant: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+  },
+  cashier: { restaurant: ['sell', 'close'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
+  staff: { restaurant: ['sell', 'stock'], store: ['sell', 'stock'], fuel: ['fuel'] },
+};
+
+export function permsIn(user: User, business: string): Perm[] {
+  if (user.owner) return ALL;
+  const r = user.roles[business];
+  return r && r !== 'owner' ? BIZ_ROLE_PERMS[r][business] ?? [] : [];
 }
 
-/** Throws unless the user holds `perm` for `business`. Returns the business id. */
+/** With a business: may the user do this there? Without: in at least one business. */
+export function can(user: User, perm: Perm, business?: string) {
+  if (business) return permsIn(user, business).includes(perm);
+  return user.owner ? true : user.businesses.some((b) => permsIn(user, b).includes(perm));
+}
+
+/** Throws unless the user holds `perm` in `business`. Returns the business id. */
 export function requireBiz(ctx: Ctx, business: unknown, perm: Perm): string {
   const id = String(business ?? '');
   if (!BUSINESSES.includes(id)) throw bad('Choose a business');
-  if (!can(ctx.user, perm)) throw new HttpError(403, 'You do not have permission for this action');
   if (!ctx.user.businesses.includes(id)) throw new HttpError(403, 'You do not have access to this business');
+  if (!can(ctx.user, perm, id)) throw new HttpError(403, 'You do not have permission for this action');
   return id;
 }
 
-/** For read endpoints: 'all' (or empty) means every business the user can see. */
-export function bizScope(ctx: Ctx, business: unknown): string[] {
+/**
+ * For read endpoints: one business, or 'all' = every business the user may
+ * open (and, if `perm` is given, holds that permission in).
+ */
+export function bizScope(ctx: Ctx, business: unknown, perm?: Perm): string[] {
   const id = String(business ?? 'all');
-  if (id === 'all' || id === '') return ctx.user.businesses;
+  const allowed = ctx.user.businesses.filter((b) => !perm || can(ctx.user, perm, b));
+  if (id === 'all' || id === '') {
+    if (!allowed.length) throw new HttpError(403, 'You do not have permission for this');
+    return allowed;
+  }
   if (!ctx.user.businesses.includes(id)) throw new HttpError(403, 'You do not have access to this business');
+  if (perm && !can(ctx.user, perm, id)) throw new HttpError(403, 'You do not have permission for this');
   return [id];
+}
+
+/** A customer or supplier linked to this business (and active). */
+export async function partyIn(db: D1Database, kind: 'customer' | 'supplier', id: unknown, business: string) {
+  if (!id) return null;
+  const row = await first<{ id: string; name: string }>(db,
+    `SELECT p.id, p.name FROM ${kind}s p JOIN ${kind}_businesses l ON l.${kind}_id = p.id AND l.business_id = ? WHERE p.id = ? AND p.active = 1`, business, String(id));
+  if (!row) throw bad(`${kind === 'customer' ? 'Customer' : 'Supplier'} not found in this business`);
+  return row;
 }
 
 // ── Values ──────────────────────────────────────────────────────

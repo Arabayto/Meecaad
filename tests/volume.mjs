@@ -49,9 +49,14 @@ async function main() {
   const start = dayStr(today, DAYS);
   const t0 = Date.now();
 
-  const supplier = (await post('/suppliers', { name: 'Main Supplier' })).id;
+  const supplier = (await post('/suppliers', { business: 'store', name: 'Main Supplier' })).id;
+  await call('PATCH', `/suppliers/${supplier}`, { businesses: ['store', 'fuel'] });
   const customers = [];
-  for (let i = 0; i < 60; i++) customers.push((await post('/customers', { name: `Customer ${i}` })).id);
+  for (let i = 0; i < 60; i++) {
+    const id = (await post('/customers', { business: 'store', name: `Customer ${i}` })).id;
+    await call('PATCH', `/customers/${id}`, { businesses: ['store', 'restaurant'] });
+    customers.push(id);
+  }
   const store = [], menu = [], ingredients = [];
   for (let i = 0; i < 40; i++) store.push((await post('/products', { business: 'store', name: `Item ${i}`, kind: 'item', salePrice: 100 + i * 25, openingQty: 400, openingCost: 60 + i * 15, date: start })).id);
   for (let i = 0; i < 25; i++) menu.push((await post('/products', { business: 'restaurant', name: `Dish ${i}`, kind: 'menu', salePrice: 150 + i * 20 })).id);

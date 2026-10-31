@@ -2,12 +2,12 @@
 // Passwords: PBKDF2-SHA256 (WebCrypto). Sessions: random token in an HttpOnly
 // cookie; only its SHA-256 is stored, so a database leak does not leak sessions.
 
-import { BUSINESSES, HttpError, STAFF_BUSINESS, Tx, all, bad, bool, first, newId, nowIso, str, type Ctx, type Role, type User } from './lib';
+import { BUSINESSES, HttpError, Tx, all, bad, bool, first, newId, nowIso, str, type BizRole, type Ctx, type Role, type User } from './lib';
 
 const COOKIE = 'mc_session';
 const SESSION_DAYS = 7;
 const ITERATIONS = 100_000;
-const ROLES: Role[] = ['owner', 'manager', 'cashier', 'restaurant_staff', 'fuel_staff', 'store_staff'];
+const BIZ_ROLES: BizRole[] = ['manager', 'cashier', 'staff'];
 
 const b64 = (buf: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -47,10 +47,10 @@ function validPassword(v: unknown) {
 async function loadUser(db: D1Database, id: string): Promise<User | null> {
   const u = await first<any>(db, 'SELECT id, username, full_name, role FROM users WHERE id = ? AND active = 1', id);
   if (!u) return null;
-  const businesses = u.role === 'owner'
-    ? BUSINESSES
-    : (await all<{ business_id: string }>(db, 'SELECT business_id FROM user_businesses WHERE user_id = ?', id)).map((r) => r.business_id);
-  return { ...u, businesses: BUSINESSES.filter((b) => businesses.includes(b)) };
+  const owner = u.role === 'owner';
+  const links = owner ? [] : await all<{ business_id: string; role: BizRole }>(db, 'SELECT business_id, role FROM user_businesses WHERE user_id = ?', id);
+  const roles: User['roles'] = owner ? Object.fromEntries(BUSINESSES.map((b) => [b, 'owner'])) : Object.fromEntries(links.map((l) => [l.business_id, l.role]));
+  return { ...u, owner, roles, businesses: BUSINESSES.filter((b) => roles[b]) };
 }
 
 export async function userFromRequest(db: D1Database, req: Request): Promise<User | null> {
@@ -126,39 +126,46 @@ export async function logout(db: D1Database, req: Request) {
 }
 
 // ── User management (owner) ─────────────────────────────────────
-function userBusinesses(role: Role, list: unknown): string[] {
-  if (role === 'owner') return [];
-  const staff = STAFF_BUSINESS[role];
-  if (staff) return [staff];
-  const ids = Array.isArray(list) ? list.map(String).filter((b) => BUSINESSES.includes(b)) : [];
-  if (!ids.length) throw bad('Choose at least one business for this employee');
-  return [...new Set(ids)];
+// A user is either the owner (everything) or has a role in each business they work in,
+// e.g. { store: 'manager', restaurant: 'cashier' }.
+function access(owner: boolean, v: unknown): [string, BizRole][] {
+  if (owner) return [];
+  const entries = Object.entries((v && typeof v === 'object' ? v : {}) as Record<string, unknown>)
+    .filter(([b, r]) => BUSINESSES.includes(b) && r);
+  for (const [, r] of entries) if (!BIZ_ROLES.includes(r as BizRole)) throw bad('Choose a valid role');
+  if (!entries.length) throw bad('Choose at least one business and the role in it');
+  return entries as [string, BizRole][];
 }
 
-function role(v: unknown): Role {
-  if (!ROLES.includes(v as Role)) throw bad('Choose a valid role');
-  return v as Role;
+/** users.role keeps a summary for history; permissions come from the per-business roles. */
+function summaryRole(owner: boolean, a: [string, BizRole][]): Role {
+  if (owner) return 'owner';
+  if (a.some(([, r]) => r === 'manager')) return 'manager';
+  if (a.some(([, r]) => r === 'cashier')) return 'cashier';
+  return `${a[0][0]}_staff` as Role;
 }
 
 export async function listUsers(ctx: Ctx) {
   const users = await all<any>(ctx.db, `SELECT id, username, full_name, phone, role, active, created_at FROM users ORDER BY active DESC, full_name`);
-  const links = await all<any>(ctx.db, 'SELECT user_id, business_id FROM user_businesses');
+  const links = await all<any>(ctx.db, 'SELECT user_id, business_id, role FROM user_businesses');
   return users.map((u) => ({
     ...u,
-    businesses: u.role === 'owner' ? BUSINESSES : links.filter((l) => l.user_id === u.id).map((l) => l.business_id),
+    owner: u.role === 'owner',
+    access: u.role === 'owner' ? {} : Object.fromEntries(links.filter((l) => l.user_id === u.id).map((l) => [l.business_id, l.role])),
   }));
 }
 
 export async function createUser(ctx: Ctx) {
   const b = ctx.body;
-  const r = role(b.role);
+  const owner = bool(b.owner);
+  const a = access(owner, b.access);
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`INSERT INTO users (id, username, full_name, phone, role, password_hash, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)`,
     id, str(b.username, 'Username', { required: true, max: 60 }), str(b.fullName, 'Full name', { required: true, max: 120 }),
-    str(b.phone, 'Phone', { max: 40 }), r, await hashPassword(validPassword(b.password)), nowIso(), ctx.user.id);
-  for (const biz of userBusinesses(r, b.businesses)) tx.run('INSERT INTO user_businesses (user_id, business_id) VALUES (?,?)', id, biz);
-  tx.audit('create', 'user', id, null, { username: b.username, role: r });
+    str(b.phone, 'Phone', { max: 40 }), summaryRole(owner, a), await hashPassword(validPassword(b.password)), nowIso(), ctx.user.id);
+  for (const [biz, r] of a) tx.run('INSERT INTO user_businesses (user_id, business_id, role) VALUES (?,?,?)', id, biz, r);
+  tx.audit('create', 'user', id, null, { username: b.username, owner, access: Object.fromEntries(a) });
   return tx.commit(null, { id });
 }
 
@@ -167,19 +174,22 @@ export async function updateUser(ctx: Ctx) {
   const existing = await first<any>(ctx.db, 'SELECT * FROM users WHERE id = ?', id);
   if (!existing) throw new HttpError(404, 'User not found');
   const b = ctx.body;
-  const r = role(b.role ?? existing.role);
+  const owner = b.owner === undefined ? existing.role === 'owner' : bool(b.owner);
+  const before = await all<any>(ctx.db, 'SELECT business_id, role FROM user_businesses WHERE user_id = ?', id);
+  const a = access(owner, b.access ?? Object.fromEntries(before.map((l) => [l.business_id, l.role])));
   const active = b.active === undefined ? existing.active : bool(b.active) ? 1 : 0;
-  if (id === ctx.user.id && (r !== 'owner' || !active)) throw bad('You cannot remove your own owner access');
+  if (id === ctx.user.id && (!owner || !active)) throw bad('You cannot remove your own owner access');
+  const changedAccess = JSON.stringify(Object.fromEntries(a)) !== JSON.stringify(Object.fromEntries(before.map((l) => [l.business_id, l.role]))) || owner !== (existing.role === 'owner');
   const tx = new Tx(ctx.db, ctx.user);
   tx.run('UPDATE users SET full_name = ?, phone = ?, role = ?, active = ? WHERE id = ?',
-    str(b.fullName ?? existing.full_name, 'Full name', { required: true, max: 120 }), str(b.phone ?? existing.phone, 'Phone', { max: 40 }), r, active, id);
+    str(b.fullName ?? existing.full_name, 'Full name', { required: true, max: 120 }), str(b.phone ?? existing.phone, 'Phone', { max: 40 }), summaryRole(owner, a), active, id);
   tx.run('DELETE FROM user_businesses WHERE user_id = ?', id);
-  for (const biz of userBusinesses(r, b.businesses)) tx.run('INSERT INTO user_businesses (user_id, business_id) VALUES (?,?)', id, biz);
+  for (const [biz, r] of a) tx.run('INSERT INTO user_businesses (user_id, business_id, role) VALUES (?,?,?)', id, biz, r);
   if (b.password) {
     tx.run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', await hashPassword(validPassword(b.password)), id);
   }
-  if (b.password || !active || r !== existing.role) tx.run('DELETE FROM sessions WHERE user_id = ?', id);
-  tx.audit('update', 'user', id, null, { role: r, active, passwordReset: Boolean(b.password) });
+  if (b.password || !active || changedAccess) tx.run('DELETE FROM sessions WHERE user_id = ?', id);
+  tx.audit('update', 'user', id, null, { owner, access: Object.fromEntries(a), active, passwordReset: Boolean(b.password) });
   return tx.commit(null, { id });
 }
 

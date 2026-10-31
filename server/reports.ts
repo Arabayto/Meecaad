@@ -94,7 +94,7 @@ async function closingLines(db: D1Database, business: string, date: string) {
 
 // ── Dashboard ───────────────────────────────────────────────────
 export async function dashboard(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'reports');
   const t = today();
   const ps = periods(t);
   const p = placeholders(scope);
@@ -178,8 +178,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
 
 // ── Reports ─────────────────────────────────────────────────────
 export async function summary(ctx: Ctx) {
-  requireBizRead(ctx);
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'reports');
   const from = ctx.url.searchParams.get('from') || today().slice(0, 8) + '01';
   const to = ctx.url.searchParams.get('to') || today();
   const p = placeholders(scope);
@@ -210,14 +209,10 @@ export async function summary(ctx: Ctx) {
   return { business: ctx.url.searchParams.get('business') || 'all', from, to, scope, profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit };
 }
 
-function requireBizRead(ctx: Ctx) {
-  if (!['owner', 'manager'].includes(ctx.user.role)) throw new HttpError(403, 'Reports are for the owner and managers');
-}
 
 /** Every financial transaction, newest first. */
 export async function ledger(ctx: Ctx) {
-  requireBizRead(ctx);
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'reports');
   const from = ctx.url.searchParams.get('from') || today(-7);
   const to = ctx.url.searchParams.get('to') || today();
   const type = ctx.url.searchParams.get('type');
@@ -231,10 +226,9 @@ export async function ledger(ctx: Ctx) {
 }
 
 export async function entryLines(ctx: Ctx) {
-  requireBizRead(ctx);
   const e = await first<any>(ctx.db, 'SELECT * FROM journal_entries WHERE id = ?', ctx.params.id);
   if (!e) throw new HttpError(404, 'Not found');
-  bizScope(ctx, e.business_id);
+  bizScope(ctx, e.business_id, 'reports');
   const lines = await all(ctx.db, `SELECT l.*, pm.name AS method_name, c.name AS customer_name, s.name AS supplier_name FROM journal_lines l
     LEFT JOIN payment_methods pm ON pm.id = l.method_id LEFT JOIN customers c ON c.id = l.customer_id LEFT JOIN suppliers s ON s.id = l.supplier_id WHERE entry_id = ? ORDER BY l.id`, e.id);
   return { ...e, lines };
@@ -242,7 +236,7 @@ export async function entryLines(ctx: Ctx) {
 
 /** Owner/manager overview of what is owed both ways, per business. */
 export async function balances(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'money');
   const p = placeholders(scope);
   const [cash, customers, suppliers] = await Promise.all([
     all(ctx.db, `SELECT b.business_id, b.method_id, pm.name AS method_name, b.balance FROM account_balances b JOIN payment_methods pm ON pm.id = b.method_id
@@ -324,7 +318,6 @@ export async function reopenClosing(ctx: Ctx) {
   const d = await first<any>(ctx.db, 'SELECT * FROM daily_closings WHERE id = ?', ctx.params.id);
   if (!d) throw new HttpError(404, 'Not found');
   const business = requireBiz(ctx, d.business_id, 'void');
-  if (!['owner', 'manager'].includes(ctx.user.role)) throw new HttpError(403, 'Only the owner or a manager can reopen a day');
   if (d.status !== 'closed') throw new HttpError(409, 'This closing was already reopened');
   const later = await first(ctx.db, `SELECT id FROM daily_closings WHERE business_id = ? AND status = 'closed' AND entry_date > ?`, business, d.entry_date);
   if (later) throw new HttpError(409, 'A later day is closed. Reopen the latest day first.');
