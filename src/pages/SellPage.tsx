@@ -36,8 +36,12 @@ export function SellPage() {
   const paid = payments.reduce((s, p) => s + toCents(p.amount), 0);
   const credit = total - paid;
 
-  // Until the cashier changes the payment, assume the full amount is paid in cash.
-  useEffect(() => { if (!payTouched) setPayments([{ method: 'cash', amount: total ? fromCents(total) : '' }]); }, [total, payTouched]);
+  // While one payment method covers the whole sale, its amount follows the total
+  // (changing Cash → Zaad keeps it in step). Typing a different amount or
+  // splitting the payment stops that, so a part payment is never overwritten.
+  useEffect(() => {
+    if (!payTouched) setPayments((p) => [{ method: p[0]?.method ?? 'cash', amount: total ? fromCents(total) : '' }]);
+  }, [total, payTouched]);
 
   const add = (p: any) => setCart((c) => {
     const i = c.findIndex((l) => l.product.id === p.id);
@@ -56,7 +60,7 @@ export function SellPage() {
     }, key), 'Sale saved');
     if (r) {
       setReceipt(await get(`/sales/${r.id}`));
-      setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false);
+      setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false); setPayments([{ method: 'cash', amount: '' }]);
       products.reload(); customers.reload();
     }
   };
@@ -115,7 +119,7 @@ export function SellPage() {
           <Field label="Discount"><MoneyInput value={discount} onChange={setDiscount} /></Field>
           <div className="cart-total"><span>Total</span><span>{money(total)}</span></div>
           <Field label="Payment">
-            <PaymentsEditor value={payments} total={total} onChange={(v) => { setPayTouched(true); setPayments(v); }} />
+            <PaymentsEditor value={payments} total={total} onChange={(v) => { setPayTouched(!(v.length === 1 && toCents(v[0].amount) === total)); setPayments(v); }} />
           </Field>
           {credit > 0 && (
             <div className={customer ? 'mc-warn' : 'mc-error'}>
