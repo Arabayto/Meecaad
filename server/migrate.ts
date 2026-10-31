@@ -3,10 +3,8 @@
 // the Cloudflare dashboard). Uses wrangler's own `d1_migrations` table, so
 // `wrangler d1 migrations apply` and this stay in agreement.
 //
-// New migrations: add the file in migrations/ AND to the list below.
-import m0001 from '../migrations/0001_init.sql';
-
-const MIGRATIONS: [string, string][] = [['0001_init.sql', m0001]];
+// New migrations: just add the file to migrations/ — the build embeds them all.
+import { MIGRATIONS } from './migrations.generated';
 
 let checked = false;
 

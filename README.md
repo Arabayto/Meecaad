@@ -135,7 +135,7 @@ The D1 binding is declared in `wrangler.toml` (`binding = "DB"`); Pages picks it
 
 ## Database changes (migrations)
 
-- Never edit an applied migration. Add a new file `migrations/0002_<what>.sql` **and** add it to the list in `server/migrate.ts`. The app applies it on the next request, or you can run `npm run db:migrate:remote`. Both record it in `d1_migrations`.
+- Never edit an applied migration. Add a new file `migrations/0002_<what>.sql` — the build embeds it (`scripts/embed-migrations.mjs`). The app applies it on the next request, or you can run `npm run db:migrate:remote`. Both record it in `d1_migrations`.
 - Take a backup first (below). Migrations must only add or alter — never drop tables holding financial data.
 
 ## Backup and recovery

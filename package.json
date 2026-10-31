@@ -5,14 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
+    "build": "npm run embed && tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
-    "pages:dev": "wrangler pages dev dist --port 8788",
+    "pages:dev": "npm run embed && wrangler pages dev dist --port 8788",
     "db:migrate:local": "wrangler d1 migrations apply meecaad --local",
     "db:migrate:remote": "wrangler d1 migrations apply meecaad --remote",
     "db:backup": "wrangler d1 export meecaad --remote --output backups/meecaad-$(date +%Y%m%d-%H%M%S).sql",
-    "test": "node tests/run.mjs",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name=meecaad"
+    "test": "npm run embed && node tests/run.mjs",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name=meecaad",
+    "embed": "node scripts/embed-migrations.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

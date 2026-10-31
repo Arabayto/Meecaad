@@ -4,3 +4,4 @@ dist
 backups
 *.log
 .dev.vars
+server/migrations.generated.ts
