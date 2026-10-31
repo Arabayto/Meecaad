@@ -1,7 +1,8 @@
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import { AppShell, visibleNav } from './layouts/AppShell';
-import { useAuth, type Perm } from './contexts/AuthContext';
+import { PortalProvider, useAuth, type Perm, type PortalId } from './contexts/AuthContext';
 import { LoginPage } from './pages/LoginPage';
+import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
 import { SalesPage } from './pages/SalesPage';
@@ -14,62 +15,105 @@ import { FuelPage } from './pages/FuelPage';
 import { ClosingPage } from './pages/ClosingPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { UsersPage } from './pages/UsersPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { AuditPage } from './pages/AuditPage';
 
-function Protected() {
-  const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: '#f4fbf4' }}>
-        <p style={{ color: '#066006', fontWeight: 500 }}>Loading Meecaad…</p>
-      </div>
-    );
-  }
-  if (!user) return <Navigate to="/login" replace />;
-  return <AppShell><Outlet /></AppShell>;
+const PORTAL_IDS: PortalId[] = ['restaurant', 'store', 'fuel', 'admin'];
+
+function Loading() {
+  return (
+    <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: '#f4fbf4' }}>
+      <p style={{ color: '#066006', fontWeight: 500 }}>Loading Meecaad…</p>
+    </div>
+  );
 }
 
-/** Each business has its own till: switching business starts a fresh one (no old cart for a frame). */
-function SellForBusiness() {
-  const { business } = useAuth();
-  return <SellPage key={business} />;
+/**
+ * One portal: signed in AND allowed into this business (or, for admin, the
+ * owner). Everything below sees this portal's business only.
+ */
+function Portal() {
+  const { portal } = useParams();
+  const { user, loading, portals } = useAuth();
+  const id = portal as PortalId;
+  if (!PORTAL_IDS.includes(id)) return <Navigate to="/" replace />;
+  if (loading) return <Loading />;
+  if (!user) return <Navigate to={`/${id}/login`} replace />;
+  if (!portals.includes(id)) return <Navigate to="/" replace state={{ denied: id }} />;
+  return (
+    <PortalProvider id={id}>
+      {/* key: a different portal starts fresh (no cart or form carries over between businesses) */}
+      <AppShell key={id}><Outlet /></AppShell>
+    </PortalProvider>
+  );
 }
 
-/** Renders the page only for users holding one of the permissions. */
+function PortalLogin() {
+  const { portal } = useParams();
+  return PORTAL_IDS.includes(portal as PortalId) ? <LoginPage portal={portal as PortalId} /> : <Navigate to="/" replace />;
+}
+
+/** The page only for users holding one of the permissions in this portal; otherwise the portal's home. */
 function Need({ perms, children }: { perms: Perm[]; children: JSX.Element }) {
   const { can } = useAuth();
-  return perms.some(can) ? children : <Home />;
+  return perms.some(can) ? children : <PortalHome />;
 }
 
-/** Landing page: the owner dashboard, or the first page this user can use. */
-function Home() {
-  const { can, businesses, business } = useAuth();
-  if (can('reports')) return <DashboardPage />;
-  const kind = businesses.find((b) => b.id === business)?.kind ?? '';
-  const first = visibleNav(can, kind)[0];
-  return first ? <Navigate to={first.path} replace /> : <div className="mc-note">Your account has no pages assigned. Ask the owner.</div>;
+/** A portal's landing page: its dashboard, or the first page this user can use there. */
+function PortalHome() {
+  const { can, portal, path } = useAuth();
+  if (portal === 'admin' || can('reports')) return <DashboardPage />;
+  const first = visibleNav(portal!, can).find((n) => n.path !== '/');
+  return first ? <Navigate to={path(first.path)} replace /> : <div className="mc-note">Your account has no pages in this portal. Ask the owner.</div>;
+}
+
+/** Pages that exist in a portal; anything else goes to that portal's home. */
+function PortalPage() {
+  const { page } = useParams();
+  const { portal } = useAuth();
+  const p = portal!;
+  const pages: Record<string, [Perm[], JSX.Element]> = p === 'admin' ? {
+    reports: [['users'], <ReportsPage />],
+    money: [['users'], <MoneyPage />],
+    customers: [['users'], <PartiesPage kind="customers" />],
+    suppliers: [['users'], <PartiesPage kind="suppliers" />],
+    users: [['users'], <UsersPage />],
+    settings: [['users'], <SettingsPage />],
+    audit: [['users'], <AuditPage />],
+  } : {
+    ...(p === 'fuel' ? {
+      pumps: [['fuel', 'reports'], <FuelPage />],
+      fuels: [['catalog'], <StockPage view="fuels" />],
+    } : {
+      sell: [['sell'], <SellPage />],
+      orders: [['sell'], <SellPage />],
+      sales: [['sell', 'reports'], <SalesPage />],
+      stock: [['stock', 'catalog'], <StockPage view={p === 'restaurant' ? 'ingredients' : 'products'} />],
+      ...(p === 'restaurant' ? { menu: [['catalog', 'stock'], <StockPage view="menu" />] } : {}),
+    }),
+    purchases: [['purchase'], <PurchasesPage />],
+    expenses: [['expense'], <ExpensesPage />],
+    customers: [p === 'fuel' ? ['fuel', 'reports'] : ['sell', 'reports'], <PartiesPage kind="customers" />],
+    suppliers: [['purchase'], <PartiesPage kind="suppliers" />],
+    money: [['money'], <MoneyPage />],
+    closing: [['close'], <ClosingPage />],
+    reports: [['reports'], <ReportsPage />],
+  } as Record<string, [Perm[], JSX.Element]>;
+  const entry = pages[page ?? ''];
+  if (!entry) return <Navigate to={`/${p}`} replace />;
+  return <Need perms={entry[0]}>{entry[1]}</Need>;
 }
 
 export function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route element={<Protected />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/sell" element={<Need perms={['sell']}><SellForBusiness /></Need>} />
-          <Route path="/sales" element={<Need perms={['sell', 'reports']}><SalesPage /></Need>} />
-          <Route path="/fuel" element={<Need perms={['fuel', 'reports']}><FuelPage /></Need>} />
-          <Route path="/stock" element={<Need perms={['stock', 'catalog']}><StockPage /></Need>} />
-          <Route path="/purchases" element={<Need perms={['purchase']}><PurchasesPage /></Need>} />
-          <Route path="/expenses" element={<Need perms={['expense']}><ExpensesPage /></Need>} />
-          <Route path="/customers" element={<Need perms={['sell', 'reports', 'fuel']}><PartiesPage kind="customers" /></Need>} />
-          <Route path="/suppliers" element={<Need perms={['purchase']}><PartiesPage kind="suppliers" /></Need>} />
-          <Route path="/money" element={<Need perms={['money', 'reports']}><MoneyPage /></Need>} />
-          <Route path="/closing" element={<Need perms={['close']}><ClosingPage /></Need>} />
-          <Route path="/reports" element={<Need perms={['reports']}><ReportsPage /></Need>} />
-          <Route path="/users" element={<Need perms={['users']}><UsersPage /></Need>} />
-          <Route path="/audit" element={<Need perms={['users']}><AuditPage /></Need>} />
+        <Route path="/" element={<PortalChooser />} />
+        <Route path="/login" element={<PortalChooser />} />
+        <Route path="/:portal/login" element={<PortalLogin />} />
+        <Route path="/:portal" element={<Portal />}>
+          <Route index element={<PortalHome />} />
+          <Route path=":page" element={<PortalPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

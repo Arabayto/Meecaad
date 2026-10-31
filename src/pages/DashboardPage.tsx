@@ -27,10 +27,15 @@ function Trend({ now, before, label }: { now: number; before: number; label: str
   );
 }
 
+// Alert links are business-relative; the fuel station's page is /pumps.
+const ALERT_PAGE: Record<string, string> = { '/fuel': '/pumps' };
+
 export function DashboardPage() {
-  const { businesses, businessName } = useAuth();
+  const { businesses, businessName, business, path } = useAuth();
   const navigate = useNavigate();
-  const [scope, setScope] = useState('all');
+  // In a business portal the dashboard is that business only; the owner admin can switch.
+  const [picked, setScope] = useState('all');
+  const scope = business || picked;
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>(PERIODS[0]);
   const { data: d, loading, error, reload } = useLoad(() => get('/dashboard', { business: scope }), [scope]);
 
@@ -51,6 +56,8 @@ export function DashboardPage() {
   const moneyIn = sumBy(flow, 'money_in');
   const moneyOut = sumBy(flow, 'money_out');
   const outBy = (types: string[]) => flow.filter((f: any) => types.some((t) => f.entry_type.startsWith(t))).reduce((s: number, f: any) => s + f.money_out - f.money_in, 0);
+  // From the owner admin, an alert opens the page in that business's own portal.
+  const alertLink = (a: any) => (business ? path(ALERT_PAGE[a.link] ?? a.link) : `/${a.business}${ALERT_PAGE[a.link] ?? a.link}`);
   const redAlerts = d.alerts.filter((a: any) => a.level === 'red').length;
 
   return (
@@ -60,10 +67,10 @@ export function DashboardPage() {
         actions={<button type="button" className="btn btn-secondary btn-sm" onClick={() => reload()}><RefreshCw size={14} /> Refresh</button>} />
 
       <div className="row row--between">
-        <div className="scope-tabs" role="tablist">
+        {!business && <div className="scope-tabs" role="tablist">
           <button type="button" className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All Businesses</button>
           {businesses.map((b) => <button key={b.id} type="button" className={scope === b.id ? 'active' : ''} onClick={() => setScope(b.id)}>{businessName(b.id)}</button>)}
-        </div>
+        </div>}
         <div className="scope-tabs">
           {PERIODS.map((p) => <button key={p.key} type="button" className={period.key === p.key ? 'active' : ''} onClick={() => setPeriod(p)}>{p.label}</button>)}
         </div>
@@ -150,7 +157,7 @@ export function DashboardPage() {
 
           <div className="panel__header" style={{ marginTop: 20 }}>
             <div><p>Where the money is</p><h2>Cash and mobile money balances</h2></div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate('/money')}>Open accounts</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/money'))}>Open accounts</button>
           </div>
           <div className="table-wrap">
             <table>
@@ -179,7 +186,7 @@ export function DashboardPage() {
           {d.alerts.length === 0 ? <div className="mc-note">No problems found. Stock, cash closings and fuel are in order.</div> : (
             <ul className="alert-list">
               {d.alerts.slice(0, 25).map((a: any, i: number) => (
-                <li key={i} className={`alert--${a.level}`} onClick={() => navigate(a.link)}>
+                <li key={i} className={`alert--${a.level}`} onClick={() => navigate(alertLink(a))}>
                   <strong>{a.title} <BizTag id={a.business} /></strong>
                   <span>{a.detail}</span>
                 </li>
@@ -192,7 +199,7 @@ export function DashboardPage() {
       <section className="panel">
         <div className="panel__header">
           <div><p>Recent activity</p><h2>Latest transactions {view === 'all' ? 'from all businesses' : `· ${businessName(view)}`}</h2></div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate('/reports?tab=ledger')}>All transactions</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/reports?tab=ledger'))}>All transactions</button>
         </div>
         <div className="table-wrap">
           <table>

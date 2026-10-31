@@ -26,6 +26,10 @@
 .main-content > * { transition: opacity 0.15s ease; }
 .main-content.is-refreshing > * { opacity: 0.6; transition-delay: 0.15s; }
 
+/* Portal name under the logo */
+.brand__text { display: grid; line-height: 1.15; }
+.brand__portal { font-size: 12px; font-weight: 600; color: var(--primary-dark); }
+
 /* Business switcher in the sidebar */
 .biz-switch { display: grid; gap: 4px; margin: 0 0 14px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
 .biz-switch__label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-light); padding: 0 4px 2px; }

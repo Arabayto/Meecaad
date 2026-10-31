@@ -15,7 +15,7 @@ export function ClosingPage() {
   const { business, businessName, today, can } = useAuth();
   const [date, setDate] = useState(today);
   const preview = useLoad(() => get('/closing/preview', { business, date }), [business, date]);
-  const history = useLoad(() => get('/closing', { business: can('reports') ? 'all' : business }), [business]);
+  const history = useLoad(() => get('/closing', { business }), [business]);
   // Counted amounts belong to one business and day; a new selection starts empty in the same render.
   const formKey = `${business}|${date}`;
   const [form, setForm] = useState({ key: formKey, counted: {} as Record<string, string>, explanation: '' });

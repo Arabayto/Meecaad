@@ -328,7 +328,7 @@ function Setup({ data, onChange }: { data: any; onChange: () => void }) {
   };
   return (
     <div className="form-stack">
-      {!fuels.length && <div className="mc-warn">First add the fuel types (e.g. Petrol, Diesel) with their price per litre in Stock & Products.</div>}
+      {!fuels.length && <div className="mc-warn">First add the fuel types (e.g. Petrol, Diesel) with their price per litre in Fuel Types &amp; Prices.</div>}
       <div className="grid-2">
         <div className="form-stack">
           <h3 style={{ margin: 0 }}>Add a tank</h3>
@@ -381,7 +381,7 @@ function Setup({ data, onChange }: { data: any; onChange: () => void }) {
           </div>
         </Modal>
       )}
-      <p className="small muted">Fuel prices are changed in Stock & Products (every change is kept in the price history). Current price: {fuels.map((f: any) => `${f.name} ${money(f.sale_price)}/L`).join(', ') || '—'}</p>
+      <p className="small muted">Fuel prices are changed in Fuel Types &amp; Prices (every change is kept in the price history). Current price: {fuels.map((f: any) => `${f.name} ${money(f.sale_price)}/L`).join(', ') || '—'}</p>
     </div>
   );
 }

@@ -8,10 +8,12 @@ import { BizTag, ErrorBox, Field, Money, MoneyInput, PageHeader, addDays, useLoa
 
 /** Customers (what they owe us) or suppliers (what we owe them), per business. */
 export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
-  const { business, businessName, businesses, can, today } = useAuth();
+  const { business, businessName, can, today } = useAuth();
   const isCustomers = kind === 'customers';
-  const [scope, setScope] = useState<'business' | 'all'>('business');
-  const scopeId = scope === 'all' ? 'all' : business;
+  // A portal shows only its own business's people; the owner admin sees everyone.
+  const admin = !business;
+  const scope: 'business' | 'all' = admin ? 'all' : 'business';
+  const scopeId = admin ? 'all' : business;
   const list = useLoad(() => get(`/${kind}`, { business: scopeId }), [kind, scopeId]);
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -21,32 +23,27 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
 
   const rows = (list.data ?? []).filter((c: any) => (showAll || c.balance !== 0 || search) && (!search || `${c.name} ${c.phone ?? ''}`.toLowerCase().includes(search.toLowerCase())));
   const total = (list.data ?? []).reduce((s: number, c: any) => s + c.balance, 0);
-  const canPay = isCustomers ? can('sell') : can('purchase');
-  const canEdit = isCustomers ? can('sell') : can('purchase');
+  const canPay = !admin && (isCustomers ? can('sell') || can('fuel') : can('purchase'));
+  const canEdit = isCustomers ? can('sell') || can('fuel') || admin : can('purchase') || admin;
 
   return (
     <div className="module-page">
       <PageHeader icon={isCustomers ? <UserCheck size={22} /> : <Users size={22} />}
         title={isCustomers ? 'Customers & debts' : 'Suppliers'}
         subtitle={`${isCustomers ? 'Customers owe' : 'We owe'} ${money(total)} — ${scope === 'all' ? 'all businesses' : businessName(business)}`}
-        actions={canEdit && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}>Add {isCustomers ? 'customer' : 'supplier'}</button>} />
+        actions={canEdit && !admin && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}>Add {isCustomers ? 'customer' : 'supplier'}</button>} />
       <div className="panel">
         <div className="row row--between" style={{ marginBottom: 12 }}>
           <div className="row">
             <input className="form-input" style={{ maxWidth: 260 }} placeholder="Search name or phone" value={search} onChange={(e) => setSearch(e.target.value)} />
             <label className="row small"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show everyone (also with zero balance)</label>
           </div>
-          {businesses.length > 1 && (
-            <div className="scope-tabs">
-              <button type="button" className={scope === 'business' ? 'active' : ''} onClick={() => setScope('business')}>{businessName(business)}</button>
-              <button type="button" className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All businesses</button>
-            </div>
-          )}
+          {admin && <span className="small muted">Each person belongs to the businesses shown. Edit to share one with another business.</span>}
         </div>
         <ErrorBox error={list.error} />
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Phone</th><th className="num">{isCustomers ? 'Owes us' : 'We owe'}</th><th>Last {isCustomers ? 'credit' : 'purchase'}</th><th>Last payment</th><th></th></tr></thead>
+            <thead><tr><th>Name</th>{admin && <th>Businesses</th>}<th>Phone</th><th className="num">{isCustomers ? 'Owes us' : 'We owe'}</th><th>Last {isCustomers ? 'credit' : 'purchase'}</th><th>Last payment</th><th></th></tr></thead>
             <tbody>
               {rows.map((c: any) => {
                 const lastActivity = c.last_payment ?? c.last_charge;
@@ -54,6 +51,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
                 return (
                   <tr key={c.id} style={{ opacity: c.active ? 1 : 0.5 }}>
                     <td><strong>{c.name}</strong> {overdue && <StatusBadge label="Overdue" tone="red" />}{c.notes && <div className="small muted">{c.notes}</div>}</td>
+                    {admin && <td><div className="row">{(c.businesses ?? []).map((b: string) => <BizTag key={b} id={b} />)}</div></td>}
                     <td className="small">{c.phone}</td>
                     <td className="num"><Money c={c.balance} strong /></td>
                     <td className="small">{c.last_charge ?? '—'}</td>
@@ -68,13 +66,13 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
                   </tr>
                 );
               })}
-              {!list.loading && !rows.length && <tr><td colSpan={6} className="muted">{showAll ? 'Nobody added yet.' : `Nobody ${isCustomers ? 'owes money' : 'is owed money'}. Tick "Show everyone" to see all.`}</td></tr>}
+              {!list.loading && !rows.length && <tr><td colSpan={admin ? 7 : 6} className="muted">{showAll ? 'Nobody added yet.' : `Nobody ${isCustomers ? 'owes money' : 'is owed money'}. Tick "Show everyone" to see all.`}</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
 
-      {edit && <EditModal kind={kind} party={edit} onClose={() => setEdit(null)} onDone={() => { setEdit(null); list.reload(); }} />}
+      {edit && <EditModal kind={kind} party={edit} admin={admin} onClose={() => setEdit(null)} onDone={() => { setEdit(null); list.reload(); }} />}
       {paying && <PayModal kind={kind} party={paying} onClose={() => setPaying(null)} onDone={() => { setPaying(null); list.reload(); }} />}
       <Modal open={Boolean(statement)} onClose={() => setStatement(null)} title="Statement" width="lg"
         footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
@@ -105,11 +103,14 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
   );
 }
 
-function EditModal({ kind, party, onClose, onDone }: { kind: string; party: any; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ name: party.name ?? '', phone: party.phone ?? '', notes: party.notes ?? '', active: party.active ?? 1 });
+function EditModal({ kind, party, admin, onClose, onDone }: { kind: string; party: any; admin: boolean; onClose: () => void; onDone: () => void }) {
+  const { business, businesses, businessName } = useAuth();
+  const [f, setF] = useState({ name: party.name ?? '', phone: party.phone ?? '', notes: party.notes ?? '', active: party.active ?? 1, businesses: (party.businesses ?? []) as string[] });
   const { run, busy } = useSubmit();
   const save = async () => {
-    const r = await run((key) => (party.id ? patch(`/${kind}/${party.id}`, f) : post(`/${kind}`, f, key)), 'Saved');
+    // New records belong to this portal's business; only the owner (admin) shares a record with other businesses.
+    const { businesses: links, ...rest } = f;
+    const r = await run((key) => (party.id ? patch(`/${kind}/${party.id}`, admin ? f : rest) : post(`/${kind}`, { ...rest, business }, key)), 'Saved');
     if (r) onDone();
   };
   return (
@@ -120,6 +121,14 @@ function EditModal({ kind, party, onClose, onDone }: { kind: string; party: any;
         <Field label="Phone"><input className="form-input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
         <Field label="Notes"><input className="form-input" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
         {party.id && <label className="row"><input type="checkbox" checked={Boolean(f.active)} onChange={(e) => setF({ ...f, active: e.target.checked ? 1 : 0 })} /> Active</label>}
+        {admin && party.id && (
+          <Field label="Belongs to" hint="Only these businesses see this person. It can be removed from a business only when nothing is owed there.">
+            <div className="row">{businesses.map((b) => (
+              <label key={b.id} className="row small"><input type="checkbox" checked={f.businesses.includes(b.id)}
+                onChange={(e) => setF({ ...f, businesses: e.target.checked ? [...f.businesses, b.id] : f.businesses.filter((x) => x !== b.id) })} /> {businessName(b.id)}</label>
+            ))}</div>
+          </Field>
+        )}
       </div>
     </Modal>
   );

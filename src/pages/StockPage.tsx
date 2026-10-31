@@ -8,15 +8,23 @@ import { Tabs } from '../components/Tabs';
 import { ErrorBox, Field, Money, MoneyInput, PageHeader, fmtTime, useLoad, useSubmit } from '../components/ui';
 
 const KIND_LABEL: Record<string, string> = { menu: 'Menu item', ingredient: 'Ingredient / kitchen stock', item: 'Product', fuel: 'Fuel type' };
-const KINDS: Record<string, string[]> = { restaurant: ['menu', 'ingredient'], store: ['item'], fuel: ['fuel'] };
+/** Each catalog page shows one kind of item of one business. */
+export type CatalogView = 'menu' | 'ingredients' | 'products' | 'fuels';
+const VIEW: Record<CatalogView, { kind: string; title: string; add: string; unit: string; categoryHint: string | null }> = {
+  menu: { kind: 'menu', title: 'Menu', add: 'Add dish or drink', unit: 'plate', categoryHint: 'e.g. Breakfast, Main dishes, Hot drinks, Juices' },
+  ingredients: { kind: 'ingredient', title: 'Ingredients & kitchen stock', add: 'Add ingredient', unit: 'kg', categoryHint: 'e.g. Meat, Vegetables, Spices, Dry goods' },
+  products: { kind: 'item', title: 'Products & stock', add: 'Add product', unit: 'pcs', categoryHint: 'e.g. Rice & flour, Cooking oil, Soft drinks' },
+  fuels: { kind: 'fuel', title: 'Fuel types & prices', add: 'Add fuel type', unit: 'L', categoryHint: null },
+};
 const MOVE_LABEL: Record<string, string> = {
   opening: 'Opening stock', purchase: 'Purchase', purchase_void: 'Purchase cancelled', sale: 'Sale', sale_void: 'Sale cancelled', sale_return: 'Customer return',
   usage: 'Kitchen usage', waste: 'Waste / damage', adjustment: 'Count correction', fuel_sale: 'Pump sales', fuel_sale_void: 'Pump sales cancelled', tank_dip: 'Tank dip variance',
 };
 
-export function StockPage() {
-  const { business, businessName, businesses, can } = useAuth();
-  const kind = businesses.find((b) => b.id === business)?.kind ?? 'store';
+export function StockPage({ view }: { view: CatalogView }) {
+  const { business, can } = useAuth();
+  const v = VIEW[view];
+  const kind = v.kind;
   const [tab, setTab] = useState('products');
   const [search, setSearch] = useState('');
   const products = useLoad(() => get('/products', { business, stats: '1' }), [business]);
@@ -24,22 +32,25 @@ export function StockPage() {
   const [edit, setEdit] = useState<any>(null);
   const [adjust, setAdjust] = useState<any>(null);
 
-  const rows = (products.data ?? []).filter((p: any) => !search || `${p.name} ${p.category} ${p.sku ?? ''}`.toLowerCase().includes(search.toLowerCase()));
+  const all = (products.data ?? []).filter((p: any) => p.kind === kind);
+  // Category suggestions come only from this business's own items of this kind.
+  const categories = [...new Set(all.map((p: any) => p.category).filter(Boolean))] as string[];
+  const rows = all.filter((p: any) => !search || `${p.name} ${p.category} ${p.sku ?? ''}`.toLowerCase().includes(search.toLowerCase()));
   const value = rows.reduce((s: number, p: any) => s + (p.track_stock ? p.stock_value : 0), 0);
   const low = rows.filter((p: any) => p.active && p.track_stock && p.kind !== 'fuel' && (p.stock_qty <= 0 || p.stock_qty <= p.reorder_level)).length;
 
   return (
     <div className="module-page">
-      <PageHeader icon={<PackageSearch size={22} />} title={`Stock & products — ${businessName(business)}`}
+      <PageHeader icon={<PackageSearch size={22} />} title={v.title}
         subtitle={`Stock value ${money(value)} at cost · ${low} items low or out of stock`}
-        actions={can('catalog') && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> Add {kind === 'fuel' ? 'fuel type' : 'item'}</button>} />
+        actions={can('catalog') && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> {v.add}</button>} />
       <div className="panel">
         <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }]} activeTab={tab} onTabChange={setTab} />
         <ErrorBox error={products.error} />
         {tab === 'products' ? (
           <>
             <input className="form-input" style={{ maxWidth: 300, marginBottom: 12 }} placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
-            {kind === 'fuel' && <div className="mc-note" style={{ marginBottom: 12 }}>Fuel stock is kept per tank: record deliveries in Purchases and tank dips in Fuel Station. Change the selling price here.</div>}
+            {kind === 'fuel' && <div className="mc-note" style={{ marginBottom: 12 }}>Fuel stock is kept per tank: record deliveries in Deliveries and tank dips in Pumps &amp; Shifts. Change the price per litre here.</div>}
             <div className="table-wrap">
               <table>
                 <thead><tr><th>Item</th><th>Type</th><th className="num">Selling price</th><th className="num">In stock</th><th className="num">Avg cost</th><th className="num">Stock value</th><th className="num">Sold 30 days</th><th></th></tr></thead>
@@ -93,17 +104,18 @@ export function StockPage() {
         )}
       </div>
 
-      {edit && <ProductModal product={edit} kinds={KINDS[kind]} onClose={() => setEdit(null)} onDone={() => { setEdit(null); products.reload(); }} />}
+      {edit && <ProductModal product={edit} view={view} categories={categories} onClose={() => setEdit(null)} onDone={() => { setEdit(null); products.reload(); }} />}
       {adjust && <AdjustModal product={adjust} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); products.reload(); moves.reload(); }} />}
     </div>
   );
 }
 
-function ProductModal({ product, kinds, onClose, onDone }: { product: any; kinds: string[]; onClose: () => void; onDone: () => void }) {
+function ProductModal({ product, view, categories, onClose, onDone }: { product: any; view: CatalogView; categories: string[]; onClose: () => void; onDone: () => void }) {
   const { business } = useAuth();
+  const v = VIEW[view];
   const isNew = !product.id;
   const [f, setF] = useState({
-    name: product.name ?? '', category: product.category ?? '', kind: product.kind ?? kinds[0], unit: product.unit ?? (kinds[0] === 'fuel' ? 'L' : 'pcs'),
+    name: product.name ?? '', category: product.category ?? '', kind: product.kind ?? v.kind, unit: product.unit ?? v.unit,
     sku: product.sku ?? '', salePrice: product.sale_price !== undefined ? fromCents(product.sale_price) : '', trackStock: product.track_stock ?? 1,
     reorderLevel: String(product.reorder_level ?? ''), openingQty: '', openingCost: '', priceReason: '', active: product.active ?? 1,
   });
@@ -124,21 +136,19 @@ function ProductModal({ product, kinds, onClose, onDone }: { product: any; kinds
   };
 
   return (
-    <Modal open onClose={onClose} title={isNew ? 'Add item' : `Edit ${product.name}`} width="md"
+    <Modal open onClose={onClose} title={isNew ? v.add : `Edit ${product.name}`} width="md"
       footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
         <button type="button" className="btn btn-primary" disabled={busy || !f.name.trim()} onClick={save}>Save</button></>}>
       <div className="form-stack">
-        <div className="form-row">
-          <Field label="Name"><input className="form-input" value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus /></Field>
-          <Field label="Category"><input className="form-input" value={f.category} onChange={(e) => set('category', e.target.value)} placeholder="e.g. Drinks, Rice, Oil" /></Field>
+        <div className={v.categoryHint ? 'form-row' : ''}>
+          <Field label={view === 'fuels' ? 'Fuel name (e.g. Diesel, Petrol)' : 'Name'}><input className="form-input" value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus /></Field>
+          {v.categoryHint && (
+            <Field label="Category">
+              <input className="form-input" list={`categories-${view}`} value={f.category} onChange={(e) => set('category', e.target.value)} placeholder={v.categoryHint} />
+              <datalist id={`categories-${view}`}>{categories.map((c) => <option key={c} value={c} />)}</datalist>
+            </Field>
+          )}
         </div>
-        {kinds.length > 1 && isNew && (
-          <Field label="Type">
-            <select className="form-select" value={f.kind} onChange={(e) => set('kind', e.target.value)}>
-              {kinds.map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
-            </select>
-          </Field>
-        )}
         <div className="form-row-3">
           {f.kind !== 'ingredient' && <Field label={f.kind === 'fuel' ? 'Price per litre' : 'Selling price'}><MoneyInput value={f.salePrice} onChange={(v) => set('salePrice', v)} /></Field>}
           <Field label="Unit"><input className="form-input" value={f.unit} onChange={(e) => set('unit', e.target.value)} placeholder="pcs, kg, L" /></Field>

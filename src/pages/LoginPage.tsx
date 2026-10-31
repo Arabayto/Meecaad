@@ -1,43 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, ShieldCheck, User, UserPlus } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, PORTALS, type PortalId } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
-// Same sign-in design as the Al-Hayat ERP, with Meecaad branding. On the very
-// first run (no users yet) it creates the owner account instead.
-export function LoginPage() {
-  const { login, setup, setupRequired, user, loading: booting } = useAuth();
-  const { addToast } = useToast();
-  const navigate = useNavigate();
-  const [fullName, setFullName] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  if (!booting && user) return <Navigate to="/" replace />;
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-    try {
-      if (setupRequired) await setup(fullName, username, password);
-      else await login(username, password);
-      addToast('success', 'Welcome!');
-      navigate('/');
-    } catch (err: any) {
-      setError(err?.message || 'Wrong username or password');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <>
-      <style>{`
+export const LOGIN_CSS = `
         
         .login-root {
           font-family: 'Inter', sans-serif;
@@ -265,15 +232,52 @@ export function LoginPage() {
           .login-card { margin: 16px; padding: 32px 24px; border-radius: 12px; }
           .login-title { font-size: 20px; }
         }
-      `}</style>
+      `;
+
+// Same sign-in design as the Al-Hayat ERP, with Meecaad branding. Each portal
+// has its own sign-in page (/store/login, …) using the one central account.
+// On the very first run (no users yet) it creates the owner account instead.
+export function LoginPage({ portal }: { portal?: PortalId }) {
+  const { login, setup, setupRequired, user, loading: booting } = useAuth();
+  const { addToast } = useToast();
+  const navigate = useNavigate();
+  const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const home = portal ? `/${portal}` : '/';
+  if (!booting && user) return <Navigate to={home} replace />;
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      if (setupRequired) await setup(fullName, username, password);
+      else await login(username, password);
+      addToast('success', 'Welcome!');
+      navigate(setupRequired ? '/' : home);
+    } catch (err: any) {
+      setError(err?.message || 'Wrong username or password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <style>{LOGIN_CSS}</style>
 
       <div className="login-root">
         <div className="login-bg-pattern" />
         <div className="login-card">
           <div className="login-logo-wrap">
             <div className="login-logo-ring"><img src="/logo.svg" alt="Meecaad" /></div>
-            <h1 className="login-title">{setupRequired ? 'Set up Meecaad' : 'Sign in to Meecaad'}</h1>
-            <p className="login-subtitle">{setupRequired ? 'Create the owner account to start' : 'Restaurant & Cafe · Fuel Station · Store'}</p>
+            <h1 className="login-title">{setupRequired ? 'Set up Meecaad' : portal ? PORTALS[portal].short : 'Sign in to Meecaad'}</h1>
+            <p className="login-subtitle">{setupRequired ? 'Create the owner account to start' : portal ? `Sign in to ${PORTALS[portal].name}` : 'Restaurant & Cafe · Fuel Station · Store'}</p>
           </div>
 
           {error && (
@@ -315,6 +319,7 @@ export function LoginPage() {
             </button>
           </form>
 
+          {portal && !setupRequired && <div className="login-footer"><Link to="/">← Choose another portal</Link></div>}
           <div className="login-footer"><ShieldCheck size={14} /> Secure connection</div>
         </div>
       </div>

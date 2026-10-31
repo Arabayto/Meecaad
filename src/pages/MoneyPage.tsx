@@ -10,13 +10,17 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export function MoneyPage() {
-  const { businesses, business, businessName, activeMethods, today, can } = useAuth();
-  const balances = useLoad(() => get('/balances', { business: 'all' }), []);
+  const { businesses: allBusinesses, business, businessName, activeMethods, today, can } = useAuth();
+  // In a business portal: that business's accounts only. The owner admin sees all three.
+  const businesses = business ? allBusinesses.filter((b) => b.id === business) : allBusinesses;
+  const scope = business || 'all';
+  const balances = useLoad(() => get('/balances', { business: scope }), [scope]);
   const [from, setFrom] = useState(addDays(today, -30));
   const [to, setTo] = useState(today);
-  const list = useLoad(() => get('/money', { business: 'all', from, to }), [from, to]);
+  const list = useLoad(() => get('/money', { business: scope, from, to }), [scope, from, to]);
   const [type, setType] = useState('transfer');
-  const [f, setF] = useState({ business, method: 'cash', toBusiness: business, toMethod: 'zaad', amount: '', note: '', date: today });
+  const home = business || allBusinesses[0]?.id || '';
+  const [f, setF] = useState({ business: home, method: 'cash', toBusiness: home, toMethod: 'zaad', amount: '', note: '', date: today });
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
   const [voiding, setVoiding] = useState<any>(null);
   const { run, busy } = useSubmit();
@@ -31,7 +35,7 @@ export function MoneyPage() {
 
   return (
     <div className="module-page">
-      <PageHeader icon={<Wallet size={22} />} title="Money & accounts" subtitle="How much money each business has, in cash and in each mobile money account" />
+      <PageHeader icon={<Wallet size={22} />} title={business ? `Money — ${businessName(business)}` : 'Money & transfers — all businesses'} subtitle={business ? 'How much money this business has, in cash and in each mobile money account' : 'How much money each business has, in cash and in each mobile money account'} />
       <div className="panel">
         <ErrorBox error={balances.error} />
         <div className="table-wrap">
@@ -42,8 +46,8 @@ export function MoneyPage() {
                 <tr key={b.id}><td><BizTag id={b.id} /></td>{methods.map((m) => <td key={m} className="num"><Money c={bal(b.id, m)} /></td>)}
                   <td className="num"><Money c={methods.reduce((s, m) => s + bal(b.id, m), 0)} strong /></td></tr>
               ))}
-              <tr><td><strong>All</strong></td>{methods.map((m) => <td key={m} className="num"><strong><Money c={businesses.reduce((s, b) => s + bal(b.id, m), 0)} /></strong></td>)}
-                <td className="num"><Money c={(balances.data?.cash ?? []).reduce((s: number, c: any) => s + c.balance, 0)} strong /></td></tr>
+              {!business && <tr><td><strong>All</strong></td>{methods.map((m) => <td key={m} className="num"><strong><Money c={businesses.reduce((s, b) => s + bal(b.id, m), 0)} /></strong></td>)}
+                <td className="num"><Money c={(balances.data?.cash ?? []).reduce((s: number, c: any) => s + c.balance, 0)} strong /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -60,15 +64,17 @@ export function MoneyPage() {
           </div>
           <div className="form-stack">
             <div className="form-row">
-              <Field label={type === 'transfer' ? 'From business' : 'Business'}><select className="form-select" value={f.business} onChange={(e) => set('business', e.target.value)}>
-                {businesses.map((b) => <option key={b.id} value={b.id}>{businessName(b.id)}</option>)}</select></Field>
+              <Field label={type === 'transfer' ? 'From business' : 'Business'}>{business
+                ? <div className="form-input" style={{ display: 'flex', alignItems: 'center' }}>{businessName(business)}</div>
+                : <select className="form-select" value={f.business} onChange={(e) => set('business', e.target.value)}>
+                    {allBusinesses.map((b) => <option key={b.id} value={b.id}>{businessName(b.id)}</option>)}</select>}</Field>
               <Field label={type === 'transfer' ? 'From account' : 'Account'}><select className="form-select" value={f.method} onChange={(e) => set('method', e.target.value)}>
                 {activeMethods.map((m) => <option key={m.id} value={m.id}>{m.name} ({money(bal(f.business, m.name))})</option>)}</select></Field>
             </div>
             {type === 'transfer' && (
               <div className="form-row">
                 <Field label="To business"><select className="form-select" value={f.toBusiness} onChange={(e) => set('toBusiness', e.target.value)}>
-                  {businesses.map((b) => <option key={b.id} value={b.id}>{businessName(b.id)}</option>)}</select></Field>
+                  {allBusinesses.map((b) => <option key={b.id} value={b.id}>{businessName(b.id)}</option>)}</select></Field>
                 <Field label="To account"><select className="form-select" value={f.toMethod} onChange={(e) => set('toMethod', e.target.value)}>
                   {activeMethods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>
               </div>

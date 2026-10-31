@@ -90,7 +90,7 @@ export function SellPage() {
               </button>
             ))}
           </div>
-          {!products.loading && !shown.length && <div className="mc-note">No items to sell yet. Add them in Stock & Products.</div>}
+          {!products.loading && !shown.length && <div className="mc-note">{business === 'restaurant' ? 'No dishes or drinks yet. Add them in Menu.' : 'No products yet. Add them in Products & Stock.'}</div>}
         </div>
 
         <div className="panel pos-cart">

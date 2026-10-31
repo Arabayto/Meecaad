@@ -2,21 +2,28 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { get, post, setUnauthorizedHandler } from '../api';
 
 export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'money' | 'reports' | 'users';
-export interface User { id: string; username: string; full_name: string; role: string; businesses: string[] }
+export type BizRole = 'manager' | 'cashier' | 'staff';
+export type PortalId = 'restaurant' | 'store' | 'fuel' | 'admin';
+export interface User { id: string; username: string; full_name: string; role: string; owner: boolean; businesses: string[]; roles: Record<string, BizRole | 'owner'> }
 export interface Business { id: string; name: string; kind: 'restaurant' | 'fuel' | 'store' }
 export interface Method { id: string; name: string; active: number }
 
-// Mirrors server/lib.ts ROLE_PERMS (the server enforces; this only hides what cannot be used).
-const ROLE_PERMS: Record<string, Perm[]> = {
-  owner: ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
-  manager: ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
-  cashier: ['sell', 'close'],
-  restaurant_staff: ['sell', 'stock'],
-  store_staff: ['sell', 'stock'],
-  fuel_staff: ['fuel'],
+// Mirrors server/lib.ts BIZ_ROLE_PERMS (the server enforces; this only hides what cannot be used).
+const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
+  manager: {
+    restaurant: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+  },
+  cashier: { restaurant: ['sell', 'close'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
+  staff: { restaurant: ['sell', 'stock'], store: ['sell', 'stock'], fuel: ['fuel'] },
 };
-export const ROLE_LABELS: Record<string, string> = {
-  owner: 'Owner', manager: 'Manager', cashier: 'Cashier', restaurant_staff: 'Restaurant staff', fuel_staff: 'Fuel station staff', store_staff: 'Store staff',
+export const ROLE_LABELS: Record<string, string> = { owner: 'Owner', manager: 'Manager', cashier: 'Cashier', staff: 'Staff' };
+export const PORTALS: Record<PortalId, { name: string; short: string }> = {
+  restaurant: { name: 'Meecaad Restaurant & Cafe', short: 'Restaurant & Cafe' },
+  store: { name: 'Meecaad Store', short: 'Store' },
+  fuel: { name: 'Meecaad Fuel Station', short: 'Fuel Station' },
+  admin: { name: 'Meecaad Owner Admin', short: 'Owner Admin' },
 };
 
 interface AuthValue {
@@ -27,10 +34,17 @@ interface AuthValue {
   methods: Method[];
   activeMethods: Method[];
   today: string;
+  /** Inside a business portal: that business. In the owner admin: '' (pages show all businesses). */
   business: string;
-  setBusiness: (id: string) => void;
+  portal: PortalId | null;
   businessName: (id: string) => string;
+  /** Permission in the current portal's business (owner admin: owner only). */
   can: (perm: Perm) => boolean;
+  canIn: (perm: Perm, business: string) => boolean;
+  /** Portals this user may open. */
+  portals: PortalId[];
+  /** Path inside the current portal, e.g. path('/sell') → '/store/sell'. */
+  path: (p: string) => string;
   login: (username: string, password: string) => Promise<void>;
   setup: (fullName: string, username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -38,6 +52,7 @@ interface AuthValue {
 }
 
 const Ctx = createContext<AuthValue | null>(null);
+const PortalCtx = createContext<PortalId | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -46,7 +61,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [methods, setMethods] = useState<Method[]>([]);
   const [today, setToday] = useState('');
-  const [business, setBusinessState] = useState<string>(() => { try { return localStorage.getItem('mc_business') ?? ''; } catch { return ''; } });
 
   const reload = useCallback(async () => {
     const boot = await get('/bootstrap');
@@ -54,7 +68,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setBusinesses(boot.businesses);
     setMethods(boot.methods);
     setToday(boot.today);
-    setBusinessState((b) => (boot.user.businesses.includes(b) ? b : boot.user.businesses[0] ?? ''));
   }, []);
 
   useEffect(() => {
@@ -65,16 +78,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [reload]);
 
-  const setBusiness = (id: string) => {
-    setBusinessState(id);
-    try { localStorage.setItem('mc_business', id); } catch { /* storage unavailable */ }
-  };
+  const canIn = useCallback((perm: Perm, business: string) => {
+    if (!user) return false;
+    if (user.owner) return true;
+    const r = user.roles[business];
+    return Boolean(r && r !== 'owner' && BIZ_ROLE_PERMS[r][business]?.includes(perm));
+  }, [user]);
 
   const value: AuthValue = {
-    user, loading, setupRequired, businesses, methods, today, business, setBusiness,
+    user, loading, setupRequired, businesses, methods, today, business: '', portal: null,
     activeMethods: methods.filter((m) => m.active),
     businessName: (id) => businesses.find((b) => b.id === id)?.name.replace('Meecaad ', '') ?? id,
-    can: (perm) => Boolean(user && ROLE_PERMS[user.role]?.includes(perm)),
+    can: (perm) => Boolean(user?.owner) || (perm !== 'users' && Boolean(user?.businesses.some((b) => canIn(perm, b)))),
+    canIn,
+    portals: user ? [...(['restaurant', 'store', 'fuel'] as PortalId[]).filter((p) => user.businesses.includes(p)), ...(user.owner ? ['admin' as PortalId] : [])] : [],
+    path: (p) => p,
     login: async (username, password) => { await post('/auth/login', { username, password }); await reload(); },
     setup: async (fullName, username, password) => { await post('/auth/setup', { fullName, username, password }); setSetupRequired(false); await reload(); },
     logout: async () => { await post('/auth/logout').catch(() => null); setUser(null); },
@@ -83,8 +101,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export function useAuth() {
+/** Everything inside renders for one portal: one business (or the owner admin). */
+export function PortalProvider({ id, children }: { id: PortalId; children: ReactNode }) {
+  return <PortalCtx.Provider value={id}>{children}</PortalCtx.Provider>;
+}
+
+export function useAuth(): AuthValue {
   const v = useContext(Ctx);
+  const portal = useContext(PortalCtx);
   if (!v) throw new Error('useAuth outside AuthProvider');
-  return v;
+  if (!portal) return v;
+  const business = portal === 'admin' ? '' : portal;
+  return {
+    ...v,
+    portal,
+    business,
+    can: (perm) => (business ? v.canIn(perm, business) : Boolean(v.user?.owner)),
+    path: (p) => `/${portal}${p === '/' ? '' : p}`,
+  };
 }

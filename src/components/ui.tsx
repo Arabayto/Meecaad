@@ -203,12 +203,13 @@ export function PartySelect({ kind, value, onChange, items, onCreated, placehold
   kind: 'customers' | 'suppliers'; value: string; onChange: (id: string) => void; items: { id: string; name: string; phone?: string; balance?: number; active?: number }[];
   onCreated?: () => void; placeholder?: string;
 }) {
+  const { business } = useAuth();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const { run, busy } = useSubmit();
   const save = async () => {
-    const r = await run((key) => post(`/${kind}`, { name, phone }, key), 'Added');
+    const r = await run((key) => post(`/${kind}`, { name, phone, business }, key), 'Added');
     if (r) { onCreated?.(); onChange(r.id); setAdding(false); setName(''); setPhone(''); }
   };
   if (adding) {

@@ -21,10 +21,12 @@ const ACCOUNT_LABEL: Record<string, string> = {
 };
 
 export function ReportsPage() {
-  const { businesses, businessName, today } = useAuth();
+  const { businesses, businessName, today, business } = useAuth();
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') ?? 'pnl';
-  const [scope, setScope] = useState('all');
+  // In a business portal: that business only. The owner admin can compare them.
+  const [picked, setScope] = useState('all');
+  const scope = business || picked;
   const [from, setFrom] = useState(today.slice(0, 8) + '01');
   const [to, setTo] = useState(today);
   const summary = useLoad(() => (tab === 'ledger' ? Promise.resolve(null) : get('/reports/summary', { business: scope, from, to })), [scope, from, to, tab === 'ledger']);
@@ -45,10 +47,10 @@ export function ReportsPage() {
             { key: 'daily', label: 'Day by day' }, { key: 'ledger', label: 'All transactions' },
           ]} />
           <div className="row row--between" style={{ marginBottom: 14 }}>
-            <div className="scope-tabs">
+            {!business ? <div className="scope-tabs">
               <button type="button" className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All Businesses</button>
               {businesses.map((b) => <button key={b.id} type="button" className={scope === b.id ? 'active' : ''} onClick={() => setScope(b.id)}>{businessName(b.id)}</button>)}
-            </div>
+            </div> : <span />}
             {tab !== 'ledger' && <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />}
           </div>
         </div>
