@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  BarChart3, BookOpen, ChefHat, ClipboardCheck, Coffee, FileClock, Fuel, Gauge, Home, LayoutGrid, LogOut, Menu, PackageSearch, Receipt,
+  BarChart3, BookOpen, ChefHat, ClipboardCheck, ClipboardList, Soup, Coffee, FileClock, Fuel, Gauge, Home, LayoutGrid, LogOut, Menu, PackageSearch, Receipt,
   Settings, ShoppingBag, ShoppingCart, Store, Truck, UserCheck, Users, Wallet, X,
 } from 'lucide-react';
 import { useAuth, PORTALS, ROLE_LABELS, type Perm, type PortalId } from '../contexts/AuthContext';
@@ -14,10 +14,12 @@ export interface NavItem { label: string; path: string; icon: typeof Home; perms
 export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
   restaurant: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
-    { label: 'Orders & Tables', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
+    { label: 'New Order', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
+    { label: 'Orders', path: '/order-list', icon: ClipboardList, perms: ['sell'] },
+    { label: 'Kitchen', path: '/kitchen', icon: ChefHat, perms: ['sell'] },
     { label: 'Sales History', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
     { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog', 'stock'] },
-    { label: 'Ingredients & Stock', path: '/stock', icon: ChefHat, perms: ['stock', 'catalog'] },
+    { label: 'Ingredients & Stock', path: '/stock', icon: Soup, perms: ['stock', 'catalog'] },
     { label: 'Purchases', path: '/purchases', icon: Truck, perms: ['purchase'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },

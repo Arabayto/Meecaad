@@ -17,8 +17,9 @@ export async function listProducts(ctx: Ctx) {
     `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty FROM sales s JOIN sale_items si ON si.sale_id = s.id
                   WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date >= ? AND s.status = 'completed' GROUP BY si.product_id) ` : ''}
      SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''},
+       img.updated_at AS image_v,
        CASE WHEN p.kind = 'menu' THEN (SELECT ROUND(SUM(r.qty * i.avg_cost)) FROM recipe_items r JOIN products i ON i.id = r.ingredient_id WHERE r.menu_id = p.id) END AS recipe_cost
-     FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''}
+     FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''} LEFT JOIN product_images img ON img.product_id = p.id
      WHERE p.business_id IN (${placeholders(scope)})
      ORDER BY p.active DESC, p.kind, p.category, p.name`, ...(stats ? [...scope, today(-30)] : []), ...scope);
 }
@@ -68,6 +69,36 @@ export async function updateProduct(ctx: Ctx) {
   }
   tx.audit('update', 'product', p.id, p.business_id, { before: { name: p.name, sale_price: p.sale_price, active: p.active }, after: b });
   return tx.commit(null, { id: p.id });
+}
+
+// ── Product pictures (shown on the till) ────────────────────────
+const MAX_IMAGE = 400_000;   // base64 characters (~300 KB); the browser resizes before upload
+
+export async function saveImage(ctx: Ctx) {
+  const p = await first<any>(ctx.db, 'SELECT id, business_id FROM products WHERE id = ?', ctx.params.id);
+  if (!p) throw new HttpError(404, 'Product not found');
+  requireBiz(ctx, p.business_id, 'catalog');
+  const tx = new Tx(ctx.db, ctx.user);
+  if (ctx.body.data === null) {
+    tx.run('DELETE FROM product_images WHERE product_id = ?', p.id);
+  } else {
+    const m = /^data:(image\/(?:webp|jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(String(ctx.body.data ?? ''));
+    if (!m) throw bad('Choose a picture (JPG, PNG or WebP)');
+    if (m[2].length > MAX_IMAGE) throw bad('The picture is too large');
+    tx.run(`INSERT INTO product_images (product_id, mime, data, updated_at) VALUES (?,?,?,?)
+            ON CONFLICT (product_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at`, p.id, m[1], m[2], nowIso());
+  }
+  tx.audit(ctx.body.data === null ? 'remove_image' : 'image', 'product', p.id, p.business_id);
+  return tx.commit(null, { id: p.id });
+}
+
+export async function getImage(ctx: Ctx) {
+  const row = await first<any>(ctx.db, `SELECT i.mime, i.data, p.business_id FROM product_images i JOIN products p ON p.id = i.product_id WHERE i.product_id = ?`, ctx.params.id);
+  if (!row) throw new HttpError(404, 'No picture');
+  bizScope(ctx, row.business_id);
+  const bytes = Uint8Array.from(atob(row.data), (c) => c.charCodeAt(0));
+  // The URL carries ?v=<updated_at>, so a picture never changes under the same URL.
+  return new Response(bytes, { headers: { 'Content-Type': row.mime, 'Cache-Control': 'private, max-age=31536000, immutable' } });
 }
 
 export async function priceHistory(ctx: Ctx) {

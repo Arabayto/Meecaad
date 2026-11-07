@@ -2,10 +2,29 @@ import { useState } from 'react';
 import { PackageSearch, Plus } from 'lucide-react';
 import { fromCents, get, money, num, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { Tabs } from '../components/Tabs';
 import { ErrorBox, Field, Money, MoneyInput, PageHeader, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { ItemPicture } from './RestaurantPage';
+
+/** Crop a photo to a square and shrink it to 320 px in the browser (WebP, or JPEG where WebP is not supported). */
+function shrinkPicture(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.width, img.height), size = Math.min(320, side);
+      const c = document.createElement('canvas'); c.width = size; c.height = size;
+      c.getContext('2d')!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(img.src);
+      const webp = c.toDataURL('image/webp', 0.8);
+      resolve(webp.startsWith('data:image/webp') ? webp : c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => reject(new Error('Could not read this picture'));
+    img.src = URL.createObjectURL(file);
+  });
+}
 
 const KIND_LABEL: Record<string, string> = { menu: 'Menu item', ingredient: 'Ingredient / kitchen stock', item: 'Product', fuel: 'Fuel type' };
 /** Each catalog page shows one kind of item of one business. */
@@ -60,7 +79,8 @@ export function StockPage({ view }: { view: CatalogView }) {
                     const isLow = p.track_stock && p.kind !== 'fuel' && (p.stock_qty <= 0 || p.stock_qty <= p.reorder_level);
                     return (
                       <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                        <td><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</td>
+                        <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>{(view === 'menu' || view === 'products') && <ItemPicture item={p} size={36} />}
+                          <div><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</div></div></td>
                         <td className="small">{KIND_LABEL[p.kind]}{!p.active && ' (hidden)'}</td>
                         <td className="num">{p.kind === 'ingredient' ? '—' : money(p.sale_price)}{p.kind === 'fuel' && ' /L'}</td>
                         <td className="num">{p.track_stock ? <>{num(p.stock_qty)} {p.unit} {isLow && <StatusBadge label={p.stock_qty <= 0 ? 'Out' : 'Low'} tone={p.stock_qty <= 0 ? 'red' : 'yellow'} />}</>
@@ -118,6 +138,7 @@ export function StockPage({ view }: { view: CatalogView }) {
 
 function ProductModal({ product, view, categories, onClose, onDone }: { product: any; view: CatalogView; categories: string[]; onClose: () => void; onDone: () => void }) {
   const { business } = useAuth();
+  const { addToast } = useToast();
   const v = VIEW[view];
   const isNew = !product.id;
   const [f, setF] = useState({
@@ -137,9 +158,16 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
       trackStock: f.kind === 'menu' ? Boolean(f.trackStock) : true, reorderLevel: Number(f.reorderLevel) || 0, active: Boolean(f.active),
       openingQty: Number(f.openingQty) || 0, openingCost: toCents(f.openingCost), priceReason: f.priceReason,
     };
-    const r = await run((key) => (isNew ? post('/products', body, key) : patch(`/products/${product.id}`, body)), 'Saved');
+    const r = await run(async (key) => {
+      const saved = await (isNew ? post('/products', body, key) : patch(`/products/${product.id}`, body));
+      if (picture !== undefined) await post(`/products/${saved.id}/image`, { data: picture });
+      return saved;
+    }, 'Saved');
     if (r) onDone();
   };
+  // undefined = unchanged, null = remove, string = new picture (data URL)
+  const [picture, setPicture] = useState<string | null | undefined>(undefined);
+  const showPictures = v.kind === 'menu' || v.kind === 'item';
 
   return (
     <Modal open onClose={onClose} title={isNew ? v.add : `Edit ${product.name}`} width="md"
@@ -160,6 +188,24 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
           <Field label="Unit"><input className="form-input" value={f.unit} onChange={(e) => set('unit', e.target.value)} placeholder="pcs, kg, L" /></Field>
           {f.kind !== 'fuel' && <Field label="Barcode / code"><input className="form-input" value={f.sku} onChange={(e) => set('sku', e.target.value)} /></Field>}
         </div>
+        {showPictures && (
+          <Field label="Picture (shown on the till)">
+            <div className="row">
+              {picture ? <img className="item-pic" src={picture} alt="" style={{ width: 64, height: 64 }} />
+                : picture === undefined && product.image_v ? <ItemPicture item={product} size={64} />
+                : <ItemPicture item={{ name: f.name || product.name || '' }} size={64} />}
+              <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                {product.image_v || picture ? 'Change photo' : 'Add photo'}
+                <input type="file" accept="image/*" hidden onChange={async (e) => {
+                  const file = e.target.files?.[0]; e.target.value = '';
+                  if (file) { try { setPicture(await shrinkPicture(file)); } catch { addToast('error', 'Could not read this picture. Try a JPG or PNG photo.', 4000); } }
+                }} />
+              </label>
+              {(picture || (picture === undefined && product.image_v)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPicture(null)}>Remove</button>}
+              {!picture && !product.image_v && <span className="small muted">No photo yet: an icon is shown instead.</span>}
+            </div>
+          </Field>
+        )}
         {priceChanged && <Field label="Why is the price changing? (saved in price history)"><input className="form-input" value={f.priceReason} onChange={(e) => set('priceReason', e.target.value)} /></Field>}
         {f.kind === 'menu' && isNew && (
           <label className="row"><input type="checkbox" checked={Boolean(f.trackStock)} onChange={(e) => set('trackStock', e.target.checked ? 1 : 0)} />

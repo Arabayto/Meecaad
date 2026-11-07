@@ -1,22 +1,16 @@
 import { useMemo, useState } from 'react';
-import { LayoutGrid, Printer, Save, Search, ShoppingCart, Trash2, XCircle } from 'lucide-react';
-import { get, money, num, patch, post, toCents, fromCents } from '../api';
+import { Printer, Search, ShoppingCart, Trash2 } from 'lucide-react';
+import { get, money, num, post, toCents, fromCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { SaleReceipt } from '../components/Receipt';
-import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useLoad, useSubmit, type PayLine } from '../components/ui';
+import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, useLoad, useSubmit, type PayLine } from '../components/ui';
 
 interface CartLine { product: any; qty: number }
 
-/** Point of sale. In the restaurant it also takes table orders that are paid later. */
+/** Store point of sale. (The restaurant has its own order screens: RestaurantPage.) */
 export function SellPage() {
-  const { business, businessName, today, can } = useAuth();
-  const restaurant = business === 'restaurant';
-  const tables = useLoad(() => (restaurant ? get('/restaurant/tables') : Promise.resolve([])), [restaurant]);
-  const orders = useLoad(() => (restaurant ? get('/restaurant/orders') : Promise.resolve([])), [restaurant]);
-  // The order being taken: a table, or a named takeaway; `orderId` when it is an existing open order.
-  const [order, setOrder] = useState<{ id?: string; table?: string; label?: string } | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  const { business, businessName, today } = useAuth();
   const products = useLoad(() => get('/products', { business }), [business]);
   const customers = useLoad(() => get('/customers', { business }), [business]);
   const [search, setSearch] = useState('');
@@ -56,55 +50,26 @@ export function SellPage() {
   const stockProblem = cart.find((l) => l.product.track_stock && l.qty > l.product.stock_qty);
 
   const reset = () => {
-    setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false); setPayLines([{ method: 'cash', amount: '' }]); setOrder(null);
+    setCart([]); setDiscount(''); setCustomer(''); setGiven(''); setNote(''); setPayTouched(false); setPayLines([{ method: 'cash', amount: '' }]);
   };
-  const items = () => cart.map((l) => ({ product: l.product.id, qty: l.qty }));
 
   const complete = async () => {
-    const sale = {
-      business, date: today, customer: customer || undefined, discount: toCents(discount), note, items: items(),
+    const r = await run((key) => post('/sales', {
+      business, date: today, customer: customer || undefined, discount: toCents(discount), note,
+      items: cart.map((l) => ({ product: l.product.id, qty: l.qty })),
       payments: payments.map((p) => ({ method: p.method, amount: toCents(p.amount) })),
-    };
-    // A saved table order is paid through the order (it is closed in the same save); otherwise a direct sale.
-    const r = await run((key) => (order?.id
-      ? patch(`/restaurant/orders/${order.id}`, { items: items() }).then(() => post(`/restaurant/orders/${order.id}/pay`, sale, key))
-      : post('/sales', sale, key)), 'Sale saved');
+    }, key), 'Sale saved');
     if (r) {
       setReceipt(await get(`/sales/${r.id}`));
       reset();
-      products.reload(); customers.reload(); orders.reload(); tables.reload();
+      products.reload(); customers.reload();
     }
   };
 
-  /** Restaurant: keep the order open on its table and take payment later. */
-  const saveOrder = async () => {
-    const r = await run((key) => (order?.id
-      ? patch(`/restaurant/orders/${order.id}`, { items: items(), note })
-      : post('/restaurant/orders', { table: order?.table, label: order?.label, note, items: items() }, key)), 'Order saved — pay later');
-    if (r) { reset(); orders.reload(); tables.reload(); }
-  };
-
-  const openExisting = (o: any) => {
-    reset();
-    setOrder({ id: o.id, table: o.table_id ?? undefined, label: o.label ?? undefined });
-    setNote(o.note ?? '');
-    const list = products.data ?? [];
-    setCart(o.items.map((i: any) => ({ product: list.find((p: any) => p.id === i.product_id) ?? { id: i.product_id, name: i.name, sale_price: i.sale_price }, qty: i.qty })));
-  };
-  const pickTable = (t: any) => {
-    const open = (orders.data ?? []).find((o: any) => o.table_id === t.id);
-    if (open) openExisting(open);
-    else { reset(); setOrder({ table: t.id }); }
-  };
-  const orderName = order ? (order.table ? (tables.data ?? []).find((t: any) => t.id === order.table)?.name : order.label) : null;
-
   return (
     <div className="module-page">
-      <PageHeader icon={restaurant ? <LayoutGrid size={22} /> : <ShoppingCart size={22} />} title={restaurant ? 'Orders & tables' : `Point of sale — ${businessName(business)}`}
-        subtitle={restaurant ? 'Pick a table (or takeaway), add dishes, then save the order or take payment' : 'Tap items to add them to the sale'} />
+      <PageHeader icon={<ShoppingCart size={22} />} title={`Point of sale — ${businessName(business)}`} subtitle="Tap items to add them to the sale" />
       <ErrorBox error={products.error} />
-      {restaurant && <TablesStrip tables={tables.data ?? []} orders={orders.data ?? []} current={order} onPick={pickTable}
-        onTakeaway={(label) => { reset(); setOrder({ label }); }} onOpen={openExisting} canManage={can('catalog')} onAdded={tables.reload} />}
       <div className="pos">
         <div className="panel">
           <div className="row" style={{ marginBottom: 12 }}>
@@ -130,11 +95,11 @@ export function SellPage() {
               </button>
             ))}
           </div>
-          {!products.loading && !shown.length && <div className="mc-note">{business === 'restaurant' ? 'No dishes or drinks yet. Add them in Menu.' : 'No products yet. Add them in Products & Stock.'}</div>}
+          {!products.loading && !shown.length && <div className="mc-note">No products yet. Add them in Products &amp; Stock.</div>}
         </div>
 
         <div className="panel pos-cart">
-          <h2 style={{ margin: 0, fontSize: 17 }}>{orderName ? `${order?.id ? 'Order' : 'New order'} — ${orderName}` : restaurant ? 'Quick sale (pay now)' : 'Current sale'}</h2>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Current sale</h2>
           {cart.length === 0 ? <p className="muted">No items yet.</p> : (
             <div>
               {cart.map((l) => (
@@ -173,15 +138,7 @@ export function SellPage() {
           <button type="button" className="btn btn-primary btn-block" disabled={busy || !cart.length || credit < 0 || (credit > 0 && !customer) || Boolean(stockProblem)} onClick={complete}>
             {busy ? 'Saving…' : `Complete sale ${money(total)}`}
           </button>
-          {restaurant && order && (
-            <button type="button" className="btn btn-secondary btn-block" disabled={busy || !cart.length} onClick={saveOrder}>
-              <Save size={16} /> {order.id ? 'Update order (pay later)' : 'Save order (pay later)'}
-            </button>
-          )}
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            {(cart.length > 0 || order) && <button type="button" className="btn btn-ghost btn-sm" onClick={reset}><Trash2 size={14} /> {order ? 'Close without saving' : 'Clear'}</button>}
-            {order?.id && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCancelling(true)}><XCircle size={14} /> Cancel order</button>}
-          </div>
+          {cart.length > 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={reset}><Trash2 size={14} /> Clear</button>}
         </div>
       </div>
 
@@ -192,55 +149,7 @@ export function SellPage() {
         </>}>
         {receipt && <SaleReceipt sale={receipt} />}
       </Modal>
-      {order?.id && <ReasonModal open={cancelling} onClose={() => setCancelling(false)} title={`Cancel the order for ${orderName}?`} action={`/restaurant/orders/${order.id}/cancel`}
-        confirmLabel="Cancel order" message="Nothing was paid yet, so no money or stock changes. The cancellation is recorded."
-        onDone={() => { reset(); orders.reload(); tables.reload(); }} />}
     </div>
   );
 }
 
-/** Restaurant tables (free / with an open order) plus takeaway orders. */
-function TablesStrip({ tables, orders, current, onPick, onTakeaway, onOpen, canManage, onAdded }: {
-  tables: any[]; orders: any[]; current: { id?: string; table?: string } | null; onPick: (t: any) => void; onTakeaway: (label: string) => void;
-  onOpen: (o: any) => void; canManage: boolean; onAdded: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [adding, setAdding] = useState(false);
-  const { run, busy } = useSubmit();
-  const takeaways = orders.filter((o) => !o.table_id);
-  const addTable = async () => {
-    const r = await run((key) => post('/restaurant/tables', { name }, key), 'Table added');
-    if (r) { setName(''); setAdding(false); onAdded(); }
-  };
-  return (
-    <div className="panel">
-      <div className="tables-grid">
-        {tables.filter((t) => t.active).map((t) => {
-          const o = orders.find((x) => x.table_id === t.id);
-          return (
-            <button key={t.id} type="button" className={`table-tile ${o ? 'table-tile--busy' : ''} ${current?.table === t.id ? 'table-tile--current' : ''}`} onClick={() => onPick(t)}>
-              <strong>{t.name}</strong>
-              <span>{o ? `${money(o.total)} · since ${new Date(o.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'Free'}</span>
-            </button>
-          );
-        })}
-        {takeaways.map((o) => (
-          <button key={o.id} type="button" className={`table-tile table-tile--busy ${current?.id === o.id ? 'table-tile--current' : ''}`} onClick={() => onOpen(o)}>
-            <strong>{o.label}</strong><span>{money(o.total)} · takeaway</span>
-          </button>
-        ))}
-        <button type="button" className="table-tile table-tile--add" onClick={() => { const label = window.prompt('Name for this takeaway order (e.g. customer name)', 'Takeaway'); if (label) onTakeaway(label); }}>
-          <strong>+ Takeaway</strong><span>order to pay later</span>
-        </button>
-        {canManage && (adding ? (
-          <div className="table-tile table-tile--add">
-            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Table name" autoFocus />
-            <div className="row"><button type="button" className="btn btn-primary btn-xs" disabled={busy || !name.trim()} onClick={addTable}>Add</button>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAdding(false)}>✕</button></div>
-          </div>
-        ) : <button type="button" className="table-tile table-tile--add" onClick={() => setAdding(true)}><strong>+ Table</strong><span>add a table</span></button>)}
-      </div>
-      {!tables.length && <p className="small muted" style={{ marginTop: 8 }}>No tables yet.{canManage ? ' Add your tables with “+ Table”.' : ''} Quick sales can be paid right away below without a table.</p>}
-    </div>
-  );
-}

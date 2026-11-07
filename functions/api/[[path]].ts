@@ -29,6 +29,8 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['POST', '/products', cat.createProduct, 'catalog'],
   ['PATCH', '/products/:id', cat.updateProduct, 'catalog'],
   ['GET', '/products/:id/prices', cat.priceHistory, ''],
+  ['GET', '/products/:id/image', cat.getImage, ''],
+  ['POST', '/products/:id/image', cat.saveImage, ''],
   ['POST', '/stock/adjust', cat.adjustStock, ''],
   ['GET', '/stock/movements', cat.stockMovements, ''],
 
@@ -77,6 +79,7 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['PATCH', '/restaurant/orders/:id', rest.updateOrder, ''],
   ['POST', '/restaurant/orders/:id/pay', rest.payOrder, ''],
   ['POST', '/restaurant/orders/:id/cancel', rest.cancelOrder, ''],
+  ['POST', '/restaurant/orders/:id/status', rest.setOrderStatus, ''],
   ['GET', '/restaurant/recipes/:id', rest.getRecipe, ''],
   ['POST', '/restaurant/recipes/:id', rest.saveRecipe, ''],
 
@@ -155,7 +158,8 @@ async function handle(request: Request, db: D1Database): Promise<Response> {
         const prior = await db.prepare('SELECT response FROM idempotency_keys WHERE key = ?').bind(`${user.id}:${key}`).first<{ response: string }>();
         if (prior) return json(JSON.parse(prior.response));
       }
-      return json(await handler({ db, req: request, url, params, body, user }));
+      const result = await handler({ db, req: request, url, params, body, user });
+      return result instanceof Response ? result : json(result);
     }
     throw new HttpError(404, 'Not found');
   } catch (err: any) {

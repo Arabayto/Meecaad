@@ -5,6 +5,7 @@ import { LoginPage } from './pages/LoginPage';
 import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
+import { KitchenPage, NewOrderPage, OrdersPage } from './pages/RestaurantPage';
 import { SalesPage } from './pages/SalesPage';
 import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
@@ -85,8 +86,9 @@ function PortalPage() {
       pumps: [['fuel', 'reports'], <FuelPage />],
       fuels: [['catalog'], <StockPage view="fuels" />],
     } : {
-      sell: [['sell'], <SellPage />],
-      orders: [['sell'], <SellPage />],
+      ...(p === 'restaurant'
+        ? { orders: [['sell'], <NewOrderPage />], 'order-list': [['sell'], <OrdersPage />], kitchen: [['sell'], <KitchenPage />] }
+        : { sell: [['sell'], <SellPage />] }),
       sales: [['sell', 'reports'], <SalesPage />],
       stock: [['stock', 'catalog'], <StockPage view={p === 'restaurant' ? 'ingredients' : 'products'} />],
       ...(p === 'restaurant' ? { menu: [['catalog', 'stock'], <StockPage view="menu" />] } : {}),

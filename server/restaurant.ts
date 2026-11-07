@@ -2,7 +2,7 @@
 // Every endpoint here is fixed to the restaurant business.
 
 import { prepareSale } from './ops';
-import { HttpError, Tx, all, bad, bool, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, round3, str, type Ctx } from './lib';
+import { HttpError, Tx, all, bad, bool, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, round3, str, today, type Ctx } from './lib';
 
 const R = 'restaurant';
 
@@ -82,16 +82,19 @@ export async function createOrder(ctx: Ctx) {
   requireBiz(ctx, R, 'sell');
   const items = await orderItems(ctx, ctx.body.items);
   const table = await tableFree(ctx, ctx.body.table);
-  const label = str(ctx.body.label, 'Name', { max: 60 });
-  if (!table && !label) throw bad('Choose a table, or give the order a name (e.g. Takeaway – Ali)');
+  const label = str(ctx.body.label, 'Name', { max: 60 });   // optional: table or name; every order has a number
   const id = newId();
+  const date = today();
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`INSERT INTO open_orders (id, table_id, label, note, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
-    id, table?.id, label, str(ctx.body.note, 'Note', { max: 300 }), ctx.user.id, nowIso(), nowIso());
+  // Order numbers restart every day (#1, #2, …) so they are easy to call out.
+  tx.run(`INSERT INTO open_orders (id, table_id, label, note, order_date, number, created_by, created_at, updated_at)
+          VALUES (?,?,?,?,?, (SELECT COALESCE(MAX(number), 0) + 1 FROM open_orders WHERE business_id = 'restaurant' AND order_date = ?), ?,?,?)`,
+    id, table?.id, label, str(ctx.body.note, 'Note', { max: 300 }), date, date, ctx.user.id, nowIso(), nowIso());
   for (const i of items) tx.run('INSERT INTO open_order_items (id, order_id, product_id, qty, note) VALUES (?,?,?,?,?)', newId(), id, i.product, i.qty, i.note);
   tx.audit('create', 'order', id, R, { table: table?.name, label, items: items.length });
   try {
-    return await tx.commit(idemKey(ctx), { id });
+    await tx.commit(idemKey(ctx), { id });
+    return first(ctx.db, 'SELECT id, number FROM open_orders WHERE id = ?', id);
   } catch (e: any) {
     if (String(e?.message).includes('already exists')) throw new HttpError(409, 'That table already has an open order');
     throw e;
@@ -105,7 +108,6 @@ export async function updateOrder(ctx: Ctx) {
   const items = await orderItems(ctx, ctx.body.items);
   const table = ctx.body.table === undefined ? (o.table_id ? { id: o.table_id } : null) : await tableFree(ctx, ctx.body.table, o.id);
   const label = ctx.body.label === undefined ? o.label : str(ctx.body.label, 'Name', { max: 60 });
-  if (!table && !label) throw bad('Choose a table, or give the order a name');
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE open_orders SET table_id = ?, label = ?, note = ?, updated_at = ? WHERE id = ? AND status = 'open'`,
     table?.id ?? null, label, ctx.body.note === undefined ? o.note : str(ctx.body.note, 'Note', { max: 300 }), nowIso(), o.id);
@@ -113,6 +115,19 @@ export async function updateOrder(ctx: Ctx) {
   for (const i of items) tx.run('INSERT INTO open_order_items (id, order_id, product_id, qty, note) VALUES (?,?,?,?,?)', newId(), o.id, i.product, i.qty, i.note);
   tx.audit('update', 'order', o.id, R, { items: items.map((i) => [i.product, i.qty]) });
   return tx.commit(null, { id: o.id });
+}
+
+/** Kitchen progress of an open order: pending (sent) → ready (cooked) → served. */
+export async function setOrderStatus(ctx: Ctx) {
+  requireBiz(ctx, R, 'sell');
+  const o = await openOrder(ctx, ctx.params.id);
+  const status = String(ctx.body.status);
+  if (!['pending', 'ready', 'served'].includes(status)) throw bad('Unknown status');
+  const tx = new Tx(ctx.db, ctx.user);
+  tx.run(`UPDATE open_orders SET kitchen_status = ?, ready_at = CASE WHEN ? = 'ready' THEN ? ELSE ready_at END, updated_at = ? WHERE id = ? AND status = 'open'`,
+    status, status, nowIso(), nowIso(), o.id);
+  tx.audit(status, 'order', o.id, R, { number: o.number });
+  return tx.commit(null, { id: o.id, status });
 }
 
 export async function cancelOrder(ctx: Ctx) {

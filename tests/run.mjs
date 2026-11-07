@@ -53,7 +53,7 @@ function client() {
     if (r.status !== 200) throw new Error(`${method} ${path} → ${r.status}: ${JSON.stringify(r.data)}`);
     return r.data;
   };
-  return { call, ok, get: (p) => ok('GET', p), post: (p, b, k) => ok('POST', p, b, k) };
+  return { call, ok, get: (p) => ok('GET', p), post: (p, b, k) => ok('POST', p, b, k), cookie: () => cookie };
 }
 
 let passed = 0;
@@ -324,11 +324,36 @@ try {
     // Not enough ingredient: clear message, nothing saved.
     const big = await owner.call('POST', '/sales', { business: 'restaurant', items: [{ product: tea, qty: 100000 }], payments: [{ method: 'cash', amount: 5000000 }] });
     assert.equal(big.status, 409); assert.match(big.data.message, /Not enough Sugar/);
+    // Simple POS flow: an order needs no table; it gets a number and goes Pending → Ready → Served, then is paid.
+    const quick = await owner.post('/restaurant/orders', { items: [{ product: tea, qty: 4 }] });
+    assert.ok(quick.number >= 1, 'order has a number');
+    const next = await owner.post('/restaurant/orders', { items: [{ product: tea, qty: 1 }] });
+    assert.equal(next.number, quick.number + 1, 'numbers count up');
+    let open = await owner.get('/restaurant/orders');
+    assert.equal(open.find((o) => o.id === quick.id).kitchen_status, 'pending');
+    await owner.post(`/restaurant/orders/${quick.id}/status`, { status: 'ready' });
+    assert.equal((await owner.call('POST', `/restaurant/orders/${quick.id}/status`, { status: 'eaten' })).status, 400);
+    await owner.post(`/restaurant/orders/${quick.id}/status`, { status: 'served' });
+    open = await owner.get('/restaurant/orders');
+    assert.equal(open.find((o) => o.id === quick.id).kitchen_status, 'served');
+    assert.equal(open.find((o) => o.id === quick.id).total, 200);
+    const qs = await owner.post(`/restaurant/orders/${quick.id}/pay`, { payments: [{ method: 'zaad', amount: 200 }] });
+    assert.equal((await owner.get(`/sales/${qs.id}`)).payments[0].method_id, 'zaad');
+    await owner.post(`/restaurant/orders/${next.id}/cancel`, { reason: 'test' });
+    // Pictures: small image saved and served to the restaurant only.
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    await owner.post(`/products/${tea}/image`, { data: png });
+    assert.equal((await owner.call('POST', `/products/${tea}/image`, { data: 'data:text/html;base64,PGgxPg==' })).status, 400, 'only pictures');
+    const teaRow = (await owner.get('/products?business=restaurant')).find((p) => p.id === tea);
+    assert.ok(teaRow.image_v, 'product list says it has a picture');
+    const img = await fetch(`${BASE}/products/${tea}/image?v=1`, { headers: { Cookie: owner.cookie() } });
+    assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
     // Other businesses cannot reach restaurant tables, orders or recipes.
     const sc = client();
     await sc.post('/auth/login', { username: 'storecash', password: 'store-pass-1' });
     for (const [m, path, body] of [['GET', '/restaurant/tables'], ['GET', '/restaurant/orders'], ['POST', '/restaurant/orders', { label: 'x', items: [{ product: tea, qty: 1 }] }],
-      ['GET', `/restaurant/recipes/${tea}`], ['POST', '/restaurant/tables', { name: 'x' }]]) {
+      ['GET', `/restaurant/recipes/${tea}`], ['POST', '/restaurant/tables', { name: 'x' }], ['GET', `/products/${tea}/image`],
+      ['POST', `/products/${tea}/image`, { data: null }]]) {
       assert.equal((await sc.call(m, path, body)).status, 403, `${m} ${path}`);
     }
   });

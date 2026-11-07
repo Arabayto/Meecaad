@@ -86,6 +86,40 @@
 .pay-sum { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .btn-block { width: 100%; min-height: 48px; font-size: 16px; }
 
+/* Restaurant POS: picture tiles, order cards, kitchen screen */
+.menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+.menu-tile { position: relative; border: 2px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); overflow: hidden; transition: border-color var(--transition); }
+.menu-tile--on { border-color: var(--primary); background: var(--primary-lighter); }
+.menu-tile__main { width: 100%; display: grid; justify-items: center; gap: 4px; padding: 14px 8px 10px; border: none; background: none; cursor: pointer; text-align: center; }
+.menu-tile__main strong { font-size: 14px; line-height: 1.2; }
+.menu-tile__main .price { color: var(--primary-dark); font-weight: 800; font-size: 14px; }
+.menu-tile__qty { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); background: var(--bg-card); }
+.menu-tile__qty button { flex: 1; height: 38px; border: none; background: none; cursor: pointer; color: var(--primary-dark); display: grid; place-items: center; }
+.menu-tile__qty span { min-width: 34px; text-align: center; font-weight: 800; font-size: 17px; }
+.item-pic { border-radius: 12px; object-fit: cover; flex-shrink: 0; display: inline-grid; place-items: center; }
+.item-pic--emoji { background: #fff7e6; line-height: 1; }
+.orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+.order-card { border: 1px solid var(--border); border-left: 5px solid #eab308; border-radius: var(--radius-lg); background: var(--bg-card); padding: 14px; display: grid; gap: 8px; box-shadow: var(--shadow-sm); }
+.order-card--ready { border-left-color: #2563eb; }
+.order-card--served { border-left-color: #16a34a; }
+.order-card__title { font-size: 18px; }
+.order-card__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.order-card__items li { display: flex; justify-content: space-between; gap: 8px; }
+.kitchen-card__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 20px; }
+.kitchen-ticket .ticket-line { font-size: 16px; margin: 4px 0; }
+
+/* Sticky order bar on phones and tablets (the order panel is below the menu there) */
+.order-bar { display: none; }
+@media (max-width: 1024px) {
+  .order-bar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; gap: 10px; align-items: center; padding: 10px 14px;
+    background: var(--bg-card); border-top: 1px solid var(--border); box-shadow: 0 -4px 16px rgba(0,0,0,0.08); }
+  .order-bar__summary { flex: 1; min-width: 0; display: grid; text-align: left; border: none; background: none; cursor: pointer; padding: 0; }
+  .order-bar__summary strong { white-space: nowrap; font-size: 16px; }
+  .order-bar__summary span { font-size: 12px; color: var(--primary-dark); }
+  .order-bar .btn { min-height: 46px; flex: 0 0 auto; width: auto !important; padding: 0 20px; }
+  .module-page:has(.order-bar) { padding-bottom: 76px; }
+}
+
 /* Restaurant tables */
 .tables-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 .table-tile { display: grid; gap: 4px; text-align: left; padding: 12px; min-height: 70px; border-radius: var(--radius-md); border: 1px solid var(--border);
