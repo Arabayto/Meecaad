@@ -53,6 +53,7 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['POST', '/purchases/:id/void', ops.voidPurchase, ''],
   ['GET', '/expenses', ops.listExpenses, ''],
   ['POST', '/expenses', ops.createExpense, ''],
+  ['POST', '/expenses/batch', ops.createExpenses, ''],
   ['POST', '/expenses/:id/void', ops.voidExpense, ''],
   ['GET', '/money', ops.listMovements, ''],
   ['POST', '/money', ops.createMovement, ''],

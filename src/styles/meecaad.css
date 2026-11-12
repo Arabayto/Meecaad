@@ -94,6 +94,14 @@
 .rank-list .rank { min-width: 28px; font-weight: 800; color: var(--text-muted); }
 .rank-list .rank-name { flex: 1; min-width: 0; }
 
+/* Restaurant: one tab per client whose order is being taken */
+.draft-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.draft-tabs button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--bg-card); padding: 7px 12px;
+  border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-muted); }
+.draft-tabs button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.draft-tabs .draft-count { background: rgba(0,0,0,0.12); border-radius: 10px; padding: 0 7px; font-size: 12px; }
+.draft-tabs .draft-add { border-style: dashed; }
+
 /* Restaurant POS: picture tiles and order cards */
 .menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
 .menu-tile { position: relative; border: 2px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); overflow: hidden; transition: border-color var(--transition); }

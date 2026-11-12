@@ -1,9 +1,11 @@
 import { Fragment, useState } from 'react';
-import { ShoppingBag } from 'lucide-react';
+import { Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
-import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, useLoad, useSubmit } from '../components/ui';
+
+interface Row { category: string; description: string; amount: string; method: string; supplier: string }
 
 const CATEGORIES = ['Salaries', 'Rent', 'Electricity', 'Water', 'Generator fuel', 'Transport', 'Repairs', 'Gas / cooking fuel', 'Cleaning', 'Phone & internet', 'Taxes & licences', 'Other'];
 
@@ -15,17 +17,26 @@ export function ExpensesPage() {
   // The restaurant records expenses when they are paid (it has no suppliers).
   const owedAllowed = business !== 'restaurant';
   const suppliers = useLoad(() => (owedAllowed ? get('/suppliers', { business }) : Promise.resolve([])), [business]);
-  const [f, setF] = useState({ category: '', description: '', amount: '', method: 'cash', supplier: '', date: today });
-  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+  // Several expenses at once: one row each; empty rows are ignored; all are saved together.
+  const blank = (method = 'cash'): Row => ({ category: '', description: '', amount: '', method, supplier: '' });
+  const [lines, setLines] = useState<Row[]>([blank(), blank()]);
+  const [date, setDate] = useState(today);
   const [voiding, setVoiding] = useState<any>(null);
   const { run, busy } = useSubmit();
+  const setLine = (i: number, patch: Partial<Row>) => setLines((l) => l.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const filled = lines.filter((r) => r.category.trim() || r.amount);
+  const problem = filled.find((r) => !r.category.trim() || toCents(r.amount) <= 0 || (r.method === 'unpaid' && !r.supplier));
+  const newTotal = filled.reduce((s, r) => s + toCents(r.amount), 0);
 
   const save = async () => {
-    const r = await run((key) => post('/expenses', {
-      business, date: f.date, category: f.category, description: f.description, amount: toCents(f.amount),
-      method: f.method === 'unpaid' ? undefined : f.method, supplier: f.method === 'unpaid' ? f.supplier : undefined,
-    }, key), 'Expense saved');
-    if (r) { setF({ ...f, description: '', amount: '' }); list.reload(); }
+    const r = await run((key) => post('/expenses/batch', {
+      business, date,
+      items: filled.map((x) => ({
+        category: x.category, description: x.description, amount: toCents(x.amount),
+        method: x.method === 'unpaid' ? undefined : x.method, supplier: x.method === 'unpaid' ? x.supplier : undefined,
+      })),
+    }, key), filled.length === 1 ? 'Expense saved' : `${filled.length} expenses saved`);
+    if (r) { setLines([blank(lines[0]?.method), blank(lines[0]?.method)]); list.reload(); }
   };
 
   const rows = (list.data ?? []).filter((e: any) => e.status === 'completed');
@@ -36,39 +47,50 @@ export function ExpensesPage() {
   return (
     <div className="module-page">
       <PageHeader icon={<ShoppingBag size={22} />} title={`Expenses — ${businessName(business)}`} subtitle="Running costs of the business (not stock for sale)" />
-      <div className="grid-2">
-        <div className="panel">
-          <div className="panel__header"><div><p>New</p><h2>Record an expense</h2></div></div>
-          <div className="form-stack">
-            <div className="form-row">
-              <Field label="Category">
-                <input className="form-input" list="expense-categories" value={f.category} onChange={(e) => set('category', e.target.value)} placeholder="Choose or type" />
-                <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
-              </Field>
-              <Field label="Amount"><MoneyInput value={f.amount} onChange={(v) => set('amount', v)} /></Field>
-            </div>
-            <Field label="Details (optional)"><input className="form-input" value={f.description} onChange={(e) => set('description', e.target.value)} placeholder="e.g. October salary – Ali" /></Field>
-            <div className="form-row">
-              <Field label="Paid with">
-                <select className="form-select" value={f.method} onChange={(e) => set('method', e.target.value)}>
-                  {activeMethods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  {owedAllowed && <option value="unpaid">Not paid yet (owed)</option>}
-                </select>
-              </Field>
-              <Field label="Date"><input type="date" className="form-input" value={f.date} max={today} onChange={(e) => set('date', e.target.value)} /></Field>
-            </div>
-            {f.method === 'unpaid' && <Field label="Owed to"><PartySelect kind="suppliers" value={f.supplier} onChange={(v) => set('supplier', v)} items={suppliers.data ?? []} onCreated={suppliers.reload} placeholder="Choose…" /></Field>}
-            <div className="form-actions">
-              <button type="button" className="btn btn-primary" disabled={busy || !f.category.trim() || toCents(f.amount) <= 0 || (f.method === 'unpaid' && !f.supplier)} onClick={save}>Save expense</button>
-            </div>
+      <div className="panel">
+        <div className="panel__header">
+          <div><p>New</p><h2>Record expenses</h2></div>
+          <input type="date" className="form-input date-input" value={date} max={today} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
+        </div>
+        <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+        <div className="table-wrap lines-table">
+          <table>
+            <thead><tr><th>Category</th><th>Details (optional)</th><th>Amount</th><th>Paid with</th><th></th></tr></thead>
+            <tbody>
+              {lines.map((r, i) => (
+                <tr key={i}>
+                  <td><input className="form-input" list="expense-categories" value={r.category} onChange={(e) => setLine(i, { category: e.target.value })} placeholder="Choose or type" /></td>
+                  <td><input className="form-input" value={r.description} onChange={(e) => setLine(i, { description: e.target.value })} placeholder="e.g. salary – Ali" /></td>
+                  <td style={{ minWidth: 110 }}><MoneyInput value={r.amount} onChange={(v) => setLine(i, { amount: v })} /></td>
+                  <td style={{ minWidth: 150 }}>
+                    <select className="form-select" value={r.method} onChange={(e) => setLine(i, { method: e.target.value })}>
+                      {activeMethods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      {owedAllowed && <option value="unpaid">Not paid yet (owed)</option>}
+                    </select>
+                    {r.method === 'unpaid' && <div style={{ marginTop: 6 }}><PartySelect kind="suppliers" value={r.supplier} onChange={(v) => setLine(i, { supplier: v })} items={suppliers.data ?? []} onCreated={suppliers.reload} placeholder="Owed to…" /></div>}
+                  </td>
+                  <td>{lines.length > 1 && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setLines(lines.filter((_, j) => j !== i))} aria-label="Remove row"><Trash2 size={14} /></button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="row row--between" style={{ marginTop: 10 }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLines([...lines, blank(lines[lines.length - 1]?.method)])}><Plus size={14} /> Add row</button>
+          <div className="row">
+            {problem && <span className="small" style={{ color: '#b91c1c' }}>Each row needs a category and an amount{owedAllowed ? ' (and who it is owed to)' : ''}.</span>}
+            <strong>{money(newTotal)}</strong>
+            <button type="button" className="btn btn-primary" disabled={busy || !filled.length || Boolean(problem)} onClick={save}>
+              {filled.length > 1 ? `Save ${filled.length} expenses` : 'Save expense'}
+            </button>
           </div>
         </div>
-        <div className="panel">
-          <div className="panel__header"><div><p>This period</p><h2>{money(total)} spent</h2></div></div>
-          <div className="kv">
-            {byCat.map(([c, v]) => <Fragment key={c}><span>{c}</span><span>{money(v as number)}</span></Fragment>)}
-            {!byCat.length && <span className="muted">No expenses yet.</span>}
-          </div>
+      </div>
+      <div className="panel">
+        <div className="panel__header"><div><p>This period</p><h2>{money(total)} spent</h2></div></div>
+        <div className="kv" style={{ maxWidth: 480 }}>
+          {byCat.map(([c, v]) => <Fragment key={c}><span>{c}</span><span>{money(v as number)}</span></Fragment>)}
+          {!byCat.length && <span className="muted">No expenses yet.</span>}
         </div>
       </div>
 

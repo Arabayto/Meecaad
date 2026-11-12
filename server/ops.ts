@@ -285,10 +285,36 @@ export async function voidPurchase(ctx: Ctx) {
 
 // ── Expenses ────────────────────────────────────────────────────
 export async function createExpense(ctx: Ctx) {
-  const b = ctx.body;
-  const business = requireBiz(ctx, b.business, 'expense');
-  const date = entryDate(b.date);
+  const { business, date } = await expenseHead(ctx);
+  const tx = new Tx(ctx.db, ctx.user);
+  const id = await addExpense(ctx, tx, business, date, ctx.body);
+  return tx.commit(idemKey(ctx), { id });
+}
+
+/** Several expenses in one go (e.g. the day's bills): all saved together, or none. */
+export async function createExpenses(ctx: Ctx) {
+  const { business, date } = await expenseHead(ctx);
+  const items = Array.isArray(ctx.body.items) ? ctx.body.items : [];
+  if (!items.length) throw bad('Add at least one expense');
+  if (items.length > 50) throw bad('Save at most 50 expenses at a time');
+  const tx = new Tx(ctx.db, ctx.user);
+  const ids: string[] = [];
+  for (const [i, item] of items.entries()) {
+    try { ids.push(await addExpense(ctx, tx, business, date, item)); }
+    catch (e: any) { if (e instanceof HttpError) throw new HttpError(e.status, `Row ${i + 1}: ${e.message}`); throw e; }
+  }
+  return tx.commit(idemKey(ctx), { ids });
+}
+
+async function expenseHead(ctx: Ctx) {
+  const business = requireBiz(ctx, ctx.body.business, 'expense');
+  const date = entryDate(ctx.body.date);
   await assertDayOpen(ctx.db, business, date);
+  return { business, date };
+}
+
+/** Validates one expense and adds it (record, journal entry, audit) to the batch. */
+async function addExpense(ctx: Ctx, tx: Tx, business: string, date: string, b: any) {
   const amount = cents(b.amount, 'Amount', { min: 1 });
   const category = str(b.category, 'Category', { required: true, max: 60 })!;
   const method = b.method ? await paymentMethod(ctx.db, b.method) : null;
@@ -297,7 +323,6 @@ export async function createExpense(ctx: Ctx) {
   if (!method && !supplier) throw bad('Choose how it was paid, or the supplier it is owed to');
   const description = str(b.description, 'Description', { max: 300 });
   const id = newId();
-  const tx = new Tx(ctx.db, ctx.user);
   tx.run(`INSERT INTO expenses (id, business_id, entry_date, category, description, amount, method_id, supplier_id, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     id, business, date, category, description, amount, method, supplier?.id, ctx.user.id, nowIso());
   tx.journal({ business, date, type: 'expense', refType: 'expense', refId: id, memo: `Expense: ${category}${description ? ` — ${description}` : ''}${method ? '' : ` (owed to ${supplier!.name})`}`, amount }, [
@@ -305,7 +330,7 @@ export async function createExpense(ctx: Ctx) {
     method ? { account: 'cash', amount: -amount, method } : { account: 'payable', amount: -amount, supplier: supplier!.id },
   ]);
   tx.audit('create', 'expense', id, business, { amount, category });
-  return tx.commit(idemKey(ctx), { id });
+  return id;
 }
 
 export async function listExpenses(ctx: Ctx) {

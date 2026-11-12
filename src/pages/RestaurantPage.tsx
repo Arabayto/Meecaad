@@ -42,6 +42,19 @@ const since = (iso: string) => {
 const orderTitle = (o: any) => `#${o.number ?? '—'}${o.table_name ? ` · ${o.table_name}` : ''}${o.label ? ` · ${o.label}` : ''}`;
 
 // ── New order ───────────────────────────────────────────────────
+interface Draft { key: string; lines: Record<string, number>; table: string; label: string; note: string }
+const newDraft = (): Draft => ({ key: crypto.randomUUID(), lines: {}, table: '', label: '', note: '' });
+const DRAFTS = 'mc_restaurant_drafts';
+function loadDrafts(): Draft[] {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFTS) ?? 'null');
+    if (Array.isArray(d) && d.length && d.every((x) => x && typeof x.key === 'string' && x.lines)) return d;
+  } catch { /* storage unavailable */ }
+  return [newDraft()];
+}
+function saveDrafts(d: Draft[]) {
+  try { localStorage.setItem(DRAFTS, JSON.stringify(d)); } catch { /* storage unavailable */ }
+}
 export function NewOrderPage() {
   const { path } = useAuth();
   const navigate = useNavigate();
@@ -52,39 +65,66 @@ export function NewOrderPage() {
   const editing = useLoad(() => (editId ? get('/restaurant/orders').then((l: any[]) => l.find((o) => o.id === editId) ?? null) : Promise.resolve(null)), [editId]);
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
-  const [lines, setLines] = useState<Record<string, number>>({});
-  const [table, setTable] = useState('');
-  const [label, setLabel] = useState('');
-  const [note, setNote] = useState('');
-  const [sent, setSent] = useState<any>(null);
+  // One draft per client, so orders for several clients can be taken side by side.
+  // Drafts stay on this device (if the page reloads). Each draft's key is also its
+  // idempotency key: a retried send can never create the same order twice.
+  const [drafts, setDrafts] = useState<Draft[]>(() => (editId ? [newDraft()] : loadDrafts()));
+  const [active, setActive] = useState(0);
+  const at = Math.min(active, drafts.length - 1);
+  const cur = drafts[at];
+  const update = (patch: (d: Draft) => Partial<Draft>) => setDrafts((ds) => ds.map((d, i) => (i === at ? { ...d, ...patch(d) } : d)));
+  const { lines, table, label, note } = cur;
+  const setLines = (fn: (l: Record<string, number>) => Record<string, number>) => update((d) => ({ lines: fn(d.lines) }));
+  const setTable = (table: string) => update(() => ({ table }));
+  const setLabel = (label: string) => update(() => ({ label }));
+  const setNote = (note: string) => update(() => ({ note }));
+  useEffect(() => { if (!editId) saveDrafts(drafts); }, [drafts, editId]);
+  const [sent, setSent] = useState<any[] | null>(null);
   const { run, busy } = useSubmit();
 
   // Adding to an existing order: start from what it already has.
   useEffect(() => {
     const o = editing.data;
-    if (o) { setLines(Object.fromEntries(o.items.map((i: any) => [i.product_id, i.qty]))); setTable(o.table_id ?? ''); setLabel(o.label ?? ''); setNote(o.note ?? ''); }
+    if (o) setDrafts([{ key: o.id, lines: Object.fromEntries(o.items.map((i: any) => [i.product_id, i.qty])), table: o.table_id ?? '', label: o.label ?? '', note: o.note ?? '' }]);
   }, [editing.data]);
 
   const menu = (products.data ?? []).filter((p: any) => p.kind === 'menu' && p.active);
   const categories = [...new Set(menu.map((p: any) => p.category).filter(Boolean))] as string[];
   const shown = menu.filter((p: any) => (!category || p.category === category) && (!search || p.name.toLowerCase().includes(search.toLowerCase())));
   // In the order the waiter tapped them.
-  const chosen = Object.keys(lines).filter((id) => lines[id] > 0).map((id) => menu.find((p: any) => p.id === id)).filter(Boolean);
+  const itemsOf = (d: Draft) => Object.keys(d.lines).filter((id) => d.lines[id] > 0).map((id) => menu.find((p: any) => p.id === id)).filter(Boolean);
+  const chosen = itemsOf(cur);
+  const ready = drafts.filter((d) => itemsOf(d).length > 0);
+  const draftName = (d: Draft, i: number) => d.label || (tables.data ?? []).find((t: any) => t.id === d.table)?.name || `Client ${i + 1}`;
   const total = useMemo(() => chosen.reduce((s: number, p: any) => s + Math.round(lines[p.id] * p.sale_price), 0), [chosen, lines]);
   const count = chosen.reduce((s: number, p: any) => s + lines[p.id], 0);
   const add = (id: string, d: number) => setLines((l) => ({ ...l, [id]: Math.max(0, Math.round(((l[id] ?? 0) + d) * 1000) / 1000) }));
-  const clear = () => { setLines({}); setTable(''); setLabel(''); setNote(''); };
+  /** Remove a draft (keep at least one empty one). */
+  const drop = (key: string) => setDrafts((ds) => (ds.length > 1 ? ds.filter((d) => d.key !== key) : [newDraft()]));
+  const clear = () => drop(cur.key);
+  const addClient = () => { setDrafts((ds) => [...ds, newDraft()]); setActive(drafts.length); };
 
-  const send = async () => {
-    const items = chosen.map((p: any) => ({ product: p.id, qty: lines[p.id] }));
-    const r = await run((key) => (editId
-      ? patch(`/restaurant/orders/${editId}`, { items, table: table || null, label, note }).then(() => ({ id: editId, number: editing.data?.number }))
-      : post('/restaurant/orders', { items, table: table || undefined, label, note }, key)), editId ? 'Order updated' : 'Order sent to the kitchen');
-    if (r) {
-      setSent({ number: r.number, items: chosen.map((p: any) => ({ name: p.name, qty: lines[p.id] })), table: tables.data?.find((t: any) => t.id === table)?.name, label, note });
-      clear(); tables.reload();
-      if (editId) navigate(path('/order-list'));
+  const ticket = (d: Draft, number?: number) => ({
+    number, items: itemsOf(d).map((p: any) => ({ name: p.name, qty: d.lines[p.id] })), table: tables.data?.find((t: any) => t.id === d.table)?.name, label: d.label, note: d.note,
+  });
+  const sendDraft = async (d: Draft) => {
+    const items = itemsOf(d).map((p: any) => ({ product: p.id, qty: d.lines[p.id] }));
+    if (editId) {
+      await patch(`/restaurant/orders/${editId}`, { items, table: d.table || null, label: d.label, note: d.note });
+      return ticket(d, editing.data?.number);
     }
+    const r = await post('/restaurant/orders', { items, table: d.table || undefined, label: d.label, note: d.note }, d.key);
+    drop(d.key);
+    return ticket(d, r.number);
+  };
+  /** Send this client's order, or all clients' orders (each its own numbered order). */
+  const send = async (all = false) => {
+    const list = all ? ready : [cur];
+    const done: any[] = [];
+    const r = await run(async () => { for (const d of list) done.push(await sendDraft(d)); return done; },
+      editId ? 'Order updated' : list.length > 1 ? `${list.length} orders sent to the kitchen` : 'Order sent to the kitchen');
+    if (done.length) { setSent(done); setActive(0); tables.reload(); }
+    if (r && editId) navigate(path('/order-list'));
   };
 
   return (
@@ -123,7 +163,17 @@ export function NewOrderPage() {
         </div>
 
         <div className="panel pos-cart">
-          <h2 style={{ margin: 0, fontSize: 17 }}>{editId ? `Order ${editing.data ? `#${editing.data.number}` : ''} — add or change items` : 'New order'}</h2>
+          {!editId && (
+            <div className="draft-tabs">
+              {drafts.map((d, i) => (
+                <button key={d.key} type="button" className={i === at ? 'active' : ''} onClick={() => setActive(i)}>
+                  {draftName(d, i)}{itemsOf(d).length > 0 && <span className="draft-count">{num(itemsOf(d).reduce((t: number, p: any) => t + d.lines[p.id], 0))}</span>}
+                </button>
+              ))}
+              <button type="button" className="draft-add" onClick={addClient}><Plus size={14} /> Client</button>
+            </div>
+          )}
+          <h2 style={{ margin: 0, fontSize: 17 }}>{editId ? `Order ${editing.data ? `#${editing.data.number}` : ''} — add or change items` : `Order for ${draftName(cur, at)}`}</h2>
           {chosen.length === 0 ? <p className="muted">Tap the pictures to add items.</p> : (
             <div>
               {chosen.map((p: any) => (
@@ -145,14 +195,19 @@ export function NewOrderPage() {
                 {(tables.data ?? []).filter((t: any) => t.active && (!t.order_id || t.order_id === editId)).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </Field>
-            <Field label="Name (optional)"><input className="form-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Ali, takeaway" /></Field>
+            <Field label="Client name (optional)"><input className="form-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Ali, takeaway" /></Field>
           </div>
           <Field label="Note for the kitchen (optional)"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. no sugar in 2 teas" /></Field>
           <div className="cart-total"><span>{count ? `${num(count)} items` : 'Total'}</span><span>{money(total)}</span></div>
-          <button type="button" className="btn btn-primary btn-block" disabled={busy || !chosen.length} onClick={send}>
-            <Send size={18} /> {busy ? 'Sending…' : editId ? 'Update order' : 'Send order'}
+          <button type="button" className="btn btn-primary btn-block" disabled={busy || !chosen.length} onClick={() => send()}>
+            <Send size={18} /> {busy ? 'Sending…' : editId ? 'Update order' : `Send ${draftName(cur, at)}'s order`}
           </button>
-          {chosen.length > 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={clear}><Trash2 size={14} /> Clear</button>}
+          {!editId && ready.length > 1 && (
+            <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => send(true)}><Send size={16} /> Send all ({ready.length} orders)</button>
+          )}
+          {(chosen.length > 0 || drafts.length > 1) && !editId && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={clear}><Trash2 size={14} /> {drafts.length > 1 ? `Remove ${draftName(cur, at)}` : 'Clear'}</button>
+          )}
           <p className="small muted" style={{ margin: 0 }}>The order goes to the kitchen as <strong>Pending</strong>. Payment is taken later in Orders.</p>
         </div>
       </div>
@@ -163,17 +218,17 @@ export function NewOrderPage() {
           <button type="button" className="order-bar__summary" onClick={() => document.querySelector('.pos-cart')?.scrollIntoView({ behavior: 'smooth' })}>
             <strong>{num(count)} items · {money(total)}</strong><span>View order</span>
           </button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={send}><Send size={16} /> {editId ? 'Update' : 'Send order'}</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => send()}><Send size={16} /> {editId ? 'Update' : 'Send order'}</button>
         </div>
       )}
 
-      <Modal open={Boolean(sent)} onClose={() => setSent(null)} title={sent?.number ? `Order #${sent.number} sent` : 'Order sent'} width="sm"
+      <Modal open={Boolean(sent)} onClose={() => setSent(null)} title={sent && sent.length > 1 ? `${sent.length} orders sent: ${sent.map((t) => `#${t.number}`).join(', ')}` : sent?.[0]?.number ? `Order #${sent[0].number} sent` : 'Order sent'} width="sm"
         footer={<>
           <button type="button" className="btn btn-secondary" onClick={() => navigate(path('/order-list'))}><ClipboardList size={16} /> See orders</button>
           <button type="button" className="btn btn-secondary" onClick={() => window.print()}><Printer size={16} /> Print ticket</button>
-          <button type="button" className="btn btn-primary" onClick={() => setSent(null)}>New order</button>
+          <button type="button" className="btn btn-primary" onClick={() => setSent(null)}>{drafts.some((d) => itemsOf(d).length) ? 'Back to orders being taken' : 'New order'}</button>
         </>}>
-        {sent && <KitchenTicket order={sent} />}
+        {sent?.map((t, i) => <KitchenTicket key={i} order={t} />)}
       </Modal>
     </div>
   );

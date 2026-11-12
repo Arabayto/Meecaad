@@ -168,6 +168,20 @@ try {
       const res = await owner.call(m, path, body);
       assert.ok([400, 403].includes(res.status), `${m} ${path} should be refused for the restaurant, got ${res.status}`);
     }
+    // Several expenses at once: all saved together, or none (the bad row is named).
+    const countExp = async () => (await owner.get('/expenses?business=restaurant')).length;
+    const n0 = await countExp();
+    const bad = await owner.call('POST', '/expenses/batch', { business: 'restaurant', items: [
+      { category: 'Water', amount: 50, method: 'cash' }, { category: 'Bread', amount: 70, method: 'zaad' }, { category: '', amount: 30, method: 'cash' }] });
+    assert.equal(bad.status, 400); assert.match(bad.data.message, /^Row 3:/);
+    assert.equal(await countExp(), n0, 'nothing saved when one row is wrong');
+    const bkey = crypto.randomUUID();
+    const batch = { business: 'restaurant', items: [{ category: 'Water', amount: 50, method: 'cash' }, { category: 'Bread', amount: 70, method: 'zaad', description: 'for sambusa' }] };
+    const saved = await owner.post('/expenses/batch', batch, bkey);
+    assert.equal(saved.ids.length, 2);
+    assert.deepEqual((await owner.post('/expenses/batch', batch, bkey)).ids, saved.ids, 'a repeated request saves nothing twice');
+    assert.equal(await countExp(), n0 + 2);
+    for (const id of saved.ids) await owner.post(`/expenses/${id}/void`, { reason: 'test batch' });
     await owner.post('/expenses', { business: 'restaurant', category: 'Gas', amount: 100, method: 'cash' });
     await owner.post('/money', { type: 'transfer', business: 'restaurant', method: 'cash', toBusiness: 'store', toMethod: 'cash', amount: 100 });
     await owner.post('/money', { type: 'transfer', business: 'store', method: 'cash', toBusiness: 'restaurant', toMethod: 'cash', amount: 100 });
