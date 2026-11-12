@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { get, post, setUnauthorizedHandler } from '../api';
+import { clearPageCache, get, post, setUnauthorizedHandler } from '../api';
 
 export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'money' | 'reports' | 'users';
 export type BizRole = 'manager' | 'cashier' | 'staff';
@@ -76,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setUnauthorizedHandler(() => setUser(null));
+    setUnauthorizedHandler(() => { clearPageCache(); setUser(null); });
     get('/auth/me')
       .then(async (r) => { setSetupRequired(r.setupRequired); if (r.user) await reload(); })
       .catch(() => setUser(null))
@@ -98,9 +98,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canIn,
     portals: user ? [...(['restaurant', 'store', 'fuel'] as PortalId[]).filter((p) => user.businesses.includes(p)), ...(user.owner ? ['admin' as PortalId] : [])] : [],
     path: (p) => p,
-    login: async (username, password) => { await post('/auth/login', { username, password }); await reload(); },
+    login: async (username, password) => { clearPageCache(); await post('/auth/login', { username, password }); await reload(); },
     setup: async (fullName, username, password) => { await post('/auth/setup', { fullName, username, password }); setSetupRequired(false); await reload(); },
-    logout: async () => { await post('/auth/logout').catch(() => null); setUser(null); },
+    logout: async () => { await post('/auth/logout').catch(() => null); clearPageCache(); setUser(null); },
     reload,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

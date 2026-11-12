@@ -7,6 +7,7 @@ import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, Stat, fmtTime, useLoad, useSubmit } from '../components/ui';
 
 const R = 'restaurant';
@@ -55,6 +56,7 @@ export function ShiftPage() {
     <div className="module-page">
       <PageHeader icon={<Wallet size={22} />} title="Close my shift" subtitle={`${user?.full_name} · count the money you took and hand it over`} />
       <ErrorBox error={s.error} />
+      {!d && !s.error && <PageSkeleton />}
       {d && (d.activity ? (
         <>
           {d.mustClose && <div className="mc-error">Your shift from {d.firstDate} is still open. Close it now — you cannot take payments or pay expenses until it is closed.</div>}
@@ -102,7 +104,7 @@ export function ShiftPage() {
               <textarea className="form-textarea" rows={2} value={explanation} onChange={(e) => setExplanation(e.target.value)} />
             </Field>
             <div className="form-actions">
-              <button type="button" className="btn btn-primary" disabled={busy || s.stale || !allCounted || !receiver || (anyDiff && !explanation.trim())} onClick={close}>
+              <button type="button" className="btn btn-primary" disabled={busy || !s.fresh || !allCounted || !receiver || (anyDiff && !explanation.trim())} onClick={close}>
                 <ClipboardCheck size={16} /> Close my shift
               </button>
             </div>

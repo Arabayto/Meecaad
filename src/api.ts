@@ -37,3 +37,10 @@ export const money = (c: number | null | undefined) => usd.format((c ?? 0) / 100
 export const toCents = (v: string | number) => Math.round(Number(String(v).replace(/,/g, '')) * 100) || 0;
 export const fromCents = (c: number) => (c / 100).toFixed(2);
 export const num = (n: number | null | undefined, digits = 3) => Number((n ?? 0).toFixed(digits)).toLocaleString('en-US');
+
+// Last answer of every screen request this session (see useLoad). Opening a screen again
+// shows it at once — no empty or 0 values — while the fresh numbers load in the background.
+export const pageCache = new Map<string, unknown>();
+export const CACHE_MAX = 150;
+/** Forget everything (sign-in / sign-out: another person must never see the last one's data). */
+export function clearPageCache() { pageCache.clear(); }

@@ -4,7 +4,7 @@ import { Modal } from './Modal';
 import { StatusBadge } from './StatusBadge';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { fromCents, money, post, toCents } from '../api';
+import { CACHE_MAX, fromCents, money, pageCache, post, toCents } from '../api';
 
 // Screens currently showing the previous selection's data while new data loads.
 // AppShell fades the page a little meanwhile instead of blanking it.
@@ -22,14 +22,18 @@ export function useRefreshing() {
 }
 
 /**
- * Loads data and reloads when deps change. While new data loads, the previous
+ * Loads data and reloads when deps change. The last answer for the same request
+ * is shown immediately and refreshed in the background (`fresh` turns true when
+ * the server has answered). While data for a new selection loads, the previous
  * data stays on screen (marked `stale`) so the page does not jump or blank;
  * pages that look data up by the selection must use the selection the data
  * came back with. A slow older response can never overwrite a newer one.
  */
 export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const key = JSON.stringify(deps);
-  const [state, setState] = useState<{ key: string; data: T | null }>({ key: '', data: null });
+  const cacheKey = fn.toString() + '|' + key;   // same screen + same selection = same request
+  const [state, setState] = useState<{ key: string; data: T | null; fresh: boolean }>(() =>
+    ({ key, data: (pageCache.get(cacheKey) as T | undefined) ?? null, fresh: false }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(0);
@@ -38,17 +42,27 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
     const req = ++latest.current;
     setLoading(true);
     return fn()
-      .then((d) => { if (req === latest.current) { setState({ key, data: d }); setError(null); } })
+      .then((d) => {
+        if (req !== latest.current) return;
+        pageCache.delete(cacheKey);
+        pageCache.set(cacheKey, d);
+        if (pageCache.size > CACHE_MAX) pageCache.delete(pageCache.keys().next().value as string);
+        setState({ key, data: d, fresh: true }); setError(null);
+      })
       .catch((e) => { if (req === latest.current) setError(e.message); })
       .finally(() => { if (req === latest.current) setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   useEffect(() => { reload(); }, [reload]);
-  const stale = state.data !== null && state.key !== key;
+  // A new selection seen before: show its last answer straight away.
+  const cached = state.key !== key ? (pageCache.get(cacheKey) as T | undefined) : undefined;
+  const data = cached ?? state.data;
+  const stale = state.data !== null && state.key !== key && cached === undefined;
+  const fresh = state.key === key && state.fresh;
   useEffect(() => { setRefreshing(id.current, stale); }, [stale]);
   useEffect(() => () => setRefreshing(id.current, false), []);
-  const setData = useCallback((d: T | null) => setState({ key, data: d }), [key]);
-  return { data: state.data, stale, loading, error, reload, setData };
+  const setData = useCallback((d: T | null) => setState({ key, data: d, fresh: true }), [key]);
+  return { data, stale, fresh, loading, error, reload, setData };
 }
 
 /**
