@@ -771,6 +771,12 @@ tbody tr:hover { background: var(--primary-lighter); }
 .form-textarea { padding: 10px 14px; min-height: 80px; resize: vertical; }
 
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-row > *, .form-row-3 > * { min-width: 0; }
+/* One line per business in the user form: name, role, what the role does */
+.role-rows { display: flex; flex-direction: column; gap: 10px; }
+.role-row { display: grid; grid-template-columns: 150px 170px 1fr; gap: 10px; align-items: center; }
+.role-row .form-select { min-width: 0; width: 100%; }
+@media (max-width: 640px) { .role-row { grid-template-columns: 1fr; gap: 4px; } }
 .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
 

@@ -168,6 +168,9 @@ try {
       const res = await owner.call(m, path, body);
       assert.ok([400, 403].includes(res.status), `${m} ${path} should be refused for the restaurant, got ${res.status}`);
     }
+    // The menu shows what sells: quantity, sales amount and last sale of each item (30 days).
+    const teaRow = (await owner.get('/products?business=restaurant&stats=1')).find((x) => x.id === tea);
+    assert.ok(teaRow.sold_30d > 0 && teaRow.revenue_30d === Math.round(teaRow.sold_30d * 50) && teaRow.last_sold === today, 'menu item figures');
     // Several expenses at once: all saved together, or none (the bad row is named).
     const countExp = async () => (await owner.get('/expenses?business=restaurant')).length;
     const n0 = await countExp();

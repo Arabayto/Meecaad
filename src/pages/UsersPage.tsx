@@ -170,8 +170,10 @@ function SignInsTab() {
 }
 
 function UserModal({ u, onClose, onDone }: { u: any; onClose: () => void; onDone: () => void }) {
-  const { businesses } = useAuth();
+  const { businesses, business } = useAuth();
   const isNew = !u.id;
+  // Inside a business portal only that business is shown (the person's other businesses are kept as they are).
+  const shown = businesses.filter((b) => !business || b.id === business);
   const [f, setF] = useState({
     fullName: u.full_name ?? '', username: u.username ?? '', phone: u.phone ?? '', owner: Boolean(u.owner),
     access: { ...(u.access ?? {}) } as Record<string, BizRole | ''>, password: '', active: u.active ?? 1,
@@ -183,10 +185,11 @@ function UserModal({ u, onClose, onDone }: { u: any; onClose: () => void; onDone
     const r = await run(() => (isNew ? post('/users', body) : patch(`/users/${u.id}`, body)), 'Saved');
     if (r) onDone();
   };
+  const noAccess = !f.owner && !Object.keys(access).length;
   return (
-    <Modal open onClose={onClose} title={isNew ? 'Add employee' : `Edit ${u.full_name}`} width="md"
+    <Modal open onClose={onClose} title={isNew ? 'Add employee' : `Edit ${u.full_name}`} width="lg"
       footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn btn-primary" disabled={busy || !f.fullName.trim() || !f.username.trim() || (isNew && f.password.length < 8) || (!f.owner && !Object.keys(access).length)} onClick={save}>Save</button></>}>
+        <button type="button" className="btn btn-primary" disabled={busy || !f.fullName.trim() || !f.username.trim() || (isNew && f.password.length < 8) || noAccess} onClick={save}>Save</button></>}>
       <div className="form-stack">
         <div className="form-row">
           <Field label="Full name"><input className="form-input" value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} autoFocus /></Field>
@@ -196,31 +199,26 @@ function UserModal({ u, onClose, onDone }: { u: any; onClose: () => void; onDone
           <Field label="Username (for signing in)" hint={isNew ? 'Letters and numbers, no spaces' : undefined}><input className="form-input" value={f.username} disabled={!isNew} onChange={(e) => setF({ ...f, username: e.target.value.replace(/\s/g, '') })} autoCapitalize="none" /></Field>
           <Field label={isNew ? 'Password' : 'New password (leave empty to keep)'} hint={PASSWORD_HINT}><input className="form-input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} autoComplete="new-password" /></Field>
         </div>
-        <label className="row"><input type="checkbox" checked={f.owner} onChange={(e) => setF({ ...f, owner: e.target.checked })} /> Owner (full access to every business and the owner admin)</label>
+        {!business && <label className="row"><input type="checkbox" checked={f.owner} onChange={(e) => setF({ ...f, owner: e.target.checked })} /> Owner (full access to every business and the owner admin)</label>}
         {!f.owner && (
-          <Field label="Role in each business" hint="Leave a business on “No access” if this person does not work there.">
-            <div className="table-wrap">
-              <table>
-                <tbody>
-                  {businesses.map((b) => (
-                    <tr key={b.id}>
-                      <td><strong>{PORTALS[b.id as PortalId].short}</strong></td>
-                      <td>
-                        <select className="form-select" value={f.access[b.id] ?? ''} onChange={(e) => setF({ ...f, access: { ...f.access, [b.id]: e.target.value as BizRole | '' } })}>
-                          <option value="">No access</option>
-                          <option value="manager">Manager</option>
-                          <option value="cashier">Cashier</option>
-                          <option value="staff">Staff</option>
-                        </select>
-                      </td>
-                      <td className="small muted">{f.access[b.id] ? ROLE_HELP[f.access[b.id] as string] : ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <Field label={business ? 'Role' : 'Role in each business'} hint={business ? undefined : 'Leave a business on “No access” if this person does not work there.'}>
+            <div className="role-rows">
+              {shown.map((b) => (
+                <div key={b.id} className="role-row">
+                  <strong>{PORTALS[b.id as PortalId].short}</strong>
+                  <select className="form-select" value={f.access[b.id] ?? ''} onChange={(e) => setF({ ...f, access: { ...f.access, [b.id]: e.target.value as BizRole | '' } })}>
+                    <option value="">No access</option>
+                    <option value="manager">Manager</option>
+                    <option value="cashier">Cashier</option>
+                    <option value="staff">Staff</option>
+                  </select>
+                  <span className="small muted">{f.access[b.id] ? ROLE_HELP[f.access[b.id] as string] : ''}</span>
+                </div>
+              ))}
             </div>
           </Field>
         )}
+        {noAccess && !f.owner && !isNew && <div className="mc-note">Without any role this person cannot work anywhere. To stop them signing in, untick Active instead.</div>}
         {!isNew && <label className="row"><input type="checkbox" checked={Boolean(f.active)} onChange={(e) => setF({ ...f, active: e.target.checked ? 1 : 0 })} /> Active (uncheck to block sign-in; their records stay)</label>}
         {!isNew && <p className="small muted" style={{ margin: 0 }}>Changing the role, password or blocking signs this person out on every device.</p>}
       </div>

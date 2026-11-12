@@ -15,9 +15,10 @@ export async function listProducts(ctx: Ctx) {
   // reading just the last 30 days of sales — not on every till load.
   const stats = ctx.url.searchParams.get('stats') === '1';
   return all<any>(ctx.db,
-    `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty FROM sales s JOIN sale_items si ON si.sale_id = s.id
+    `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty, MAX(s.entry_date) AS last_sold,
+                         CAST(ROUND(SUM(si.line_total * (si.qty - si.returned_qty) / si.qty)) AS INTEGER) AS revenue FROM sales s JOIN sale_items si ON si.sale_id = s.id
                   WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date >= ? AND s.status = 'completed' GROUP BY si.product_id) ` : ''}
-     SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''},
+     SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d, COALESCE(sold.revenue, 0) AS revenue_30d, sold.last_sold' : ''},
        img.updated_at AS image_v
      FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''} LEFT JOIN product_images img ON img.product_id = p.id
      WHERE p.business_id IN (${placeholders(scope)})

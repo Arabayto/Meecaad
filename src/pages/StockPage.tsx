@@ -46,6 +46,7 @@ export function StockPage({ view }: { view: CatalogView }) {
   const menu = view === 'menu';   // the restaurant menu: no stock, just pictures and prices
   const [tab, setTab] = useState('products');
   const [search, setSearch] = useState('');
+  const [showHidden, setShowHidden] = useState(false);
   const products = useLoad(() => get('/products', { business, stats: '1' }), [business]);
   const moves = useLoad(() => (tab === 'history' ? get('/stock/movements', { business }) : Promise.resolve(null)), [business, tab]);
   const [edit, setEdit] = useState<any>(null);
@@ -54,38 +55,51 @@ export function StockPage({ view }: { view: CatalogView }) {
   const all = (products.data ?? []).filter((p: any) => p.kind === kind);
   // Category suggestions come only from this business's own items of this kind.
   const categories = [...new Set(all.map((p: any) => p.category).filter(Boolean))] as string[];
-  const rows = all.filter((p: any) => !search || `${p.name} ${p.category} ${p.sku ?? ''}`.toLowerCase().includes(search.toLowerCase()));
+  const rows = all.filter((p: any) => (!menu || showHidden || p.active || search) && (!search || `${p.name} ${p.category} ${p.sku ?? ''}`.toLowerCase().includes(search.toLowerCase())));
+  // Menu summary (last 30 days): what sells and what does not.
+  const live = all.filter((p: any) => p.active);
+  const best = [...live].sort((a: any, b: any) => b.sold_30d - a.sold_30d)[0];
+  const unsold = live.filter((p: any) => !p.sold_30d).length;
+  const hiddenCount = all.length - live.length;
+  const revenue30 = live.reduce((s: number, p: any) => s + (p.revenue_30d ?? 0), 0);
   const value = rows.reduce((s: number, p: any) => s + (p.track_stock ? p.stock_value : 0), 0);
   const low = rows.filter((p: any) => p.active && p.track_stock && p.kind !== 'fuel' && (p.stock_qty <= 0 || p.stock_qty <= p.reorder_level)).length;
 
   return (
     <div className="module-page">
       <PageHeader icon={<PackageSearch size={22} />} title={v.title}
-        subtitle={menu ? `${rows.filter((p: any) => p.active).length} items on the menu` : `Stock value ${money(value)} at cost · ${low} items low or out of stock`}
+        subtitle={menu ? `${live.length} items on the menu${best?.sold_30d ? ` · best seller: ${best.name} (${num(best.sold_30d)} sold in 30 days)` : ''} · ${money(revenue30)} sold in 30 days${unsold ? ` · ${unsold} not sold at all` : ''}` : `Stock value ${money(value)} at cost · ${low} items low or out of stock`}
         actions={can('catalog') && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> {v.add}</button>} />
       <div className="panel">
         {!menu && <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }]} activeTab={tab} onTabChange={setTab} />}
         <ErrorBox error={products.error} />
         {tab === 'products' ? (
           <>
-            <input className="form-input" style={{ maxWidth: 300, marginBottom: 12 }} placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <div className="row" style={{ marginBottom: 12 }}>
+              <input className="form-input" style={{ maxWidth: menu ? 260 : 300 }} placeholder={menu ? 'Search name or category' : 'Search'} value={search} onChange={(e) => setSearch(e.target.value)} />
+              {menu && hiddenCount > 0 && <label className="row small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> Show hidden items ({hiddenCount})</label>}
+            </div>
             {kind === 'fuel' && <div className="mc-note" style={{ marginBottom: 12 }}>Fuel stock is kept per tank: record deliveries in Deliveries and tank dips in Pumps &amp; Shifts. Change the price per litre here.</div>}
             <div className="table-wrap">
               <table>
                 {menu ? (
                   <>
-                    <thead><tr><th>Item</th><th className="num">Price</th><th className="num">Sold 30 days</th><th></th></tr></thead>
+                    <thead><tr><th>Item</th><th>Category</th><th className="num">Price</th><th className="num">Sold 30 days</th><th className="num">Sales 30 days</th><th>Last sold</th><th>Status</th><th></th></tr></thead>
                     <tbody>
                       {rows.map((p: any) => (
                         <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
                           <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}><ItemPicture item={p} size={40} />
-                            <div><strong>{p.name}</strong>{!p.active && <span className="small muted"> (hidden)</span>}{p.category && <div className="small muted">{p.category}</div>}</div></div></td>
+                            <div><strong>{p.name}</strong></div></div></td>
+                          <td className="small">{p.category || <span className="muted">—</span>}</td>
                           <td className="num">{money(p.sale_price)}</td>
                           <td className="num">{num(p.sold_30d)}</td>
+                          <td className="num">{p.revenue_30d ? money(p.revenue_30d) : <span className="muted">—</span>}</td>
+                          <td className="small">{p.last_sold ?? <span className="muted">not in 30 days</span>}</td>
+                          <td>{!p.active ? <StatusBadge label="Hidden" /> : p.sold_30d ? <StatusBadge label="On menu" tone="green" /> : <StatusBadge label="Not selling" tone="yellow" />}</td>
                           <td style={{ textAlign: 'right' }}>{can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>}</td>
                         </tr>
                       ))}
-                      {!products.loading && !rows.length && <tr><td colSpan={4} className="muted">No items yet. Add your dishes and drinks with a picture and price.</td></tr>}
+                      {!products.loading && !rows.length && <tr><td colSpan={8} className="muted">{search ? 'Nothing matches.' : 'No items yet. Add your dishes and drinks with a picture and price.'}</td></tr>}
                     </tbody>
                   </>
                 ) : (<>
