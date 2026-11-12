@@ -199,9 +199,7 @@ try {
     pump = (await owner.post('/fuel/pumps', { tank, name: 'Pump 1', meter: 5000 })).id;
     await owner.post('/purchases', { business: 'fuel', supplier, items: [{ product: diesel, tank, qty: 2000, total: 170000 }], paid: 0 });
     const shift = { readings: [{ pump, closing: 5300 }], payments: [{ method: 'cash', amount: 25000 }, { method: 'zaad', amount: 4000 }], credits: [{ customer, amount: 500 }] };
-    const noReason = await owner.call('POST', '/fuel/shifts', shift);
-    assert.equal(noReason.status, 400); assert.match(noReason.data.message, /short by 5\.00/);
-    const s = await owner.post('/fuel/shifts', { ...shift, differenceReason: 'Attendant gave wrong change' });
+    const s = await owner.post('/fuel/shifts', shift);   // money still to be accounted for is allowed: it stays outstanding
     assert.deepEqual([s.liters, s.expected, s.difference], [300, 30000, -500]);
     assert.equal((await owner.call('POST', '/fuel/shifts', { readings: [{ pump, closing: 5200 }] })).status, 400, 'meter cannot go backwards');
     const dip = await owner.post('/fuel/dips', { tank, measuredQty: 2690, reason: 'Evaporation / leak check' });
@@ -542,6 +540,63 @@ try {
     for (let i = 0; i < 25 && !limited; i++) limited = (await g.call('POST', '/auth/login', { username: `guess${i}`, password: 'x1234567' })).status === 429;
     assert.ok(limited, 'too many failures from one device');
     sql(`DELETE FROM login_attempts`);   // let the rest of the run sign in again
+  });
+
+  await step('fuel station: daily USD→SLSH rate, outstanding then settled, daily view, no money/closing pages', async () => {
+    // Exchange rate: the manager/owner sets it, the day uses the latest rate on or before it.
+    assert.equal((await owner.get('/rates')).current, null);
+    for (const bad of ['', 'abc', '0', '-5']) assert.equal((await owner.call('POST', '/rates', { rate: bad })).status, 400, `rate "${bad}"`);
+    const yesterday = new Date(Date.parse(today + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10);
+    await owner.post('/rates', { rate: '11,800', date: yesterday });
+    await owner.post('/rates', { rate: 11900 });
+    const r = await owner.get('/rates');
+    assert.deepEqual([r.current.rate, r.setToday, r.history.length], [11900, true, 2]);
+    await owner.post('/rates', { rate: 12000 });   // corrected the same day: the latest one counts
+    assert.equal((await owner.get('/rates')).current.rate, 12000);
+    await owner.post('/rates', { rate: 11900 });
+    const fc = client(), fm = client();
+    await owner.post('/users', { fullName: 'Fuel Cashier', username: 'fuelc', password: 'pump-key-321', access: { fuel: 'cashier' } });
+    await owner.post('/users', { fullName: 'Fuel Manager', username: 'fuelm', password: 'boss-key-654', access: { fuel: 'manager' } });
+    await fc.post('/auth/login', { username: 'fuelc', password: 'pump-key-321' });
+    await fm.post('/auth/login', { username: 'fuelm', password: 'boss-key-654' });
+    assert.equal((await fc.get('/rates')).current.rate, 11900, 'the cashier can read the rate');
+    assert.equal((await fc.call('POST', '/rates', { rate: 1 })).status, 403, 'but only the manager changes it');
+    assert.equal((await fm.call('POST', '/rates', { rate: 11900 })).status, 200);
+    // No daily closing and no money page at the fuel station.
+    assert.equal((await fm.call('GET', '/closing/preview?business=fuel')).status, 403);
+    assert.equal((await fc.call('GET', '/closing/preview?business=fuel')).status, 403);
+    assert.equal((await fm.call('GET', '/money?business=fuel')).status, 403);
+    assert.ok(!(await owner.get('/dashboard?business=fuel')).alerts.some((a) => a.title === 'Day not closed'));
+
+    // The earlier shift: $300.00 of sales, $290.00 received (250 cash + 40 Zaad), $5.00 debt → $5.00 outstanding.
+    let day = (await fm.get('/fuel/days')).days.find((d) => d.entry_date === today);
+    assert.deepEqual([day.sales, day.received, day.debts, day.outstanding, day.by_method.cash, day.by_method.zaad, day.rate], [30000, 29000, 500, 500, 25000, 4000, 11900]);
+    assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /not fully accounted.*\$5\.00 outstanding/.test(a.title)));
+    const cashBefore = (await owner.get('/dashboard?business=fuel')).cash.find((c) => c.business_id === 'fuel' && c.method_id === 'cash').balance;
+
+    // A second entry: $100.00 of sales, only $80.00 in cash so far.
+    assert.equal((await owner.call('POST', '/fuel/shifts', { readings: [{ pump, closing: 5410 }], payments: [{ method: 'cash', amount: 15000 }] })).status, 400, 'over needs an explanation');
+    const s2 = await owner.post('/fuel/shifts', { readings: [{ pump, closing: 5400 }], payments: [{ method: 'cash', amount: 8000 }] });
+    assert.deepEqual([s2.expected, s2.difference], [10000, -2000]);
+    assert.equal((await owner.call('POST', `/fuel/shifts/${s2.id}/settle`, { payments: [{ method: 'cash', amount: 2500 }] })).status, 400, 'more than outstanding');
+    assert.equal((await owner.call('POST', `/fuel/shifts/${s2.id}/settle`, {})).status, 400, 'nothing entered');
+    const part = await owner.post(`/fuel/shifts/${s2.id}/settle`, { payments: [{ method: 'zaad', amount: 500 }], credits: [{ customer, amount: 500 }] });
+    assert.equal(part.remaining, 1000);
+    day = (await owner.get('/fuel/days')).days.find((d) => d.entry_date === today);
+    assert.deepEqual([day.sales, day.outstanding, day.by_method.zaad, day.debts], [40000, 1500, 4500, 1000]);
+    // The cashier can receive the rest; the entry becomes settled and cannot be settled again.
+    await fc.post(`/fuel/shifts/${s2.id}/settle`, { payments: [{ method: 'cash', amount: 1000 }] });
+    assert.equal((await fc.call('POST', `/fuel/shifts/${s2.id}/settle`, { payments: [{ method: 'cash', amount: 1 }] })).status, 409);
+    const one = await owner.get(`/fuel/shifts/${s2.id}`);
+    assert.deepEqual([one.difference, one.collected_amount, one.credit_amount, one.payments.filter((p) => p.settled_at).length], [0, 9500, 500, 3]);
+    day = (await owner.get('/fuel/days')).days.find((d) => d.entry_date === today);
+    assert.deepEqual([day.sales, day.outstanding], [40000, 500]);
+    // Cancelling the entry reverses its late payments too: the books return to how they were.
+    await owner.post(`/fuel/shifts/${s2.id}/void`, { reason: 'Test entry' });
+    day = (await owner.get('/fuel/days')).days.find((d) => d.entry_date === today);
+    assert.deepEqual([day.sales, day.outstanding], [30000, 500]);
+    assert.equal((await owner.get('/dashboard?business=fuel')).cash.find((c) => c.business_id === 'fuel' && c.method_id === 'cash').balance, cashBefore);
+    assert.equal((await owner.call('POST', `/fuel/shifts/${s2.id}/settle`, { payments: [{ method: 'cash', amount: 1 }] })).status, 409, 'cancelled entries cannot be settled');
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

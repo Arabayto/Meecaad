@@ -39,12 +39,13 @@ export const BUSINESSES = ['restaurant', 'fuel', 'store'];
  * The restaurant is kept simple: orders, menu, sales, expenses, customers and
  * reports (no stock, purchases, suppliers or daily closing). Its money can
  * still be moved by the owner from the owner admin ('money').
- * The fuel station has no till; its sales are pump readings.
+ * The fuel station has no till; its sales are pump readings, accounted for as cash / Zaad / Edahab / debts
+ * (no separate daily closing and no money page there: the owner moves its money from the owner admin).
  */
 export const BUSINESS_FEATURES: Record<string, Perm[]> = {
   restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
   store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
-  fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
+  fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
 };
 
 /** What each role may do, per business. */
@@ -52,9 +53,9 @@ export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
     restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
-    fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports'],
   },
-  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },   // restaurant cashiers pay small expenses from the drawer
+  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel'] },   // restaurant cashiers pay small expenses from the drawer
   staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
 };
 

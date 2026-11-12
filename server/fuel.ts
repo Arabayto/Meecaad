@@ -10,6 +10,24 @@ import {
   type Ctx, type Line,
 } from './lib';
 
+/** How the money was received: cash / Zaad / Edahab amounts and debts (credit given to customers). */
+async function receipts(ctx: Ctx, business: string, b: any) {
+  const payments: { method: string; amount: number }[] = [];
+  for (const p of Array.isArray(b.payments) ? b.payments : []) {
+    const amount = cents(p.amount, 'Amount received', { required: false });
+    if (amount > 0) payments.push({ method: await paymentMethod(ctx.db, p.method), amount });
+  }
+  const credits: { customer: string; name: string; amount: number }[] = [];
+  for (const c of Array.isArray(b.credits) ? b.credits : []) {
+    const amount = cents(c.amount, 'Debt amount', { required: false });
+    if (amount <= 0) continue;
+    if (!c.customer) throw bad('Choose the customer for each debt');
+    const cust = (await partyIn(ctx.db, 'customer', c.customer, business))!;
+    credits.push({ customer: cust.id, name: cust.name, amount });
+  }
+  return { payments, credits };
+}
+
 export async function createShift(ctx: Ctx) {
   const business = requireBiz(ctx, 'fuel', 'fuel');
   const b = ctx.body;
@@ -34,27 +52,18 @@ export async function createShift(ctx: Ctx) {
   });
   if (!readings.length) throw bad('Enter the closing meter of at least one pump');
 
-  const payments: { method: string; amount: number }[] = [];
-  for (const p of Array.isArray(b.payments) ? b.payments : []) {
-    const amount = cents(p.amount, 'Amount received', { required: false });
-    if (amount > 0) payments.push({ method: await paymentMethod(ctx.db, p.method), amount });
-  }
-  const credits: { customer: string; name: string; amount: number }[] = [];
-  for (const c of Array.isArray(b.credits) ? b.credits : []) {
-    const amount = cents(c.amount, 'Credit amount', { required: false });
-    if (amount <= 0) continue;
-    if (!c.customer) throw bad('Choose the customer for each credit sale');
-    const cust = (await partyIn(ctx.db, 'customer', c.customer, business))!;
-    credits.push({ customer: cust.id, name: cust.name, amount });
-  }
+  const { payments, credits } = await receipts(ctx, business, b);
   const expected = readings.reduce((s: number, r: any) => s + r.amount, 0);
   const collected = payments.reduce((s, p) => s + p.amount, 0);
   const credit = credits.reduce((s, c) => s + c.amount, 0);
   const difference = collected + credit - expected;
-  const reason = str(b.differenceReason, 'Reason for the difference', { max: 300 });
-  if (difference !== 0 && !reason) {
-    throw bad(`Money received is ${difference < 0 ? 'short' : 'over'} by ${(Math.abs(difference) / 100).toFixed(2)}. Explain the difference before saving.`);
+  const given = str(b.differenceReason, 'Note', { max: 300 });
+  // Money still to be accounted for is allowed (it stays "outstanding" until it is received);
+  // more money than the sales needs an explanation.
+  if (difference > 0 && !given) {
+    throw bad(`Money received is over by ${(difference / 100).toFixed(2)}. Explain the difference before saving.`);
   }
+  const reason = difference === 0 ? null : given ?? 'Not yet accounted for (outstanding)';
   const cost = readings.reduce((s: number, r: any) => s + r.cost, 0);
   const liters = round3(readings.reduce((s: number, r: any) => s + r.liters, 0));
   const shiftName = str(b.shiftName, 'Shift', { max: 40 }) ?? 'Day';
@@ -63,7 +72,7 @@ export async function createShift(ctx: Ctx) {
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`INSERT INTO fuel_shifts (id, business_id, entry_date, shift_name, total_liters, expected_amount, collected_amount, credit_amount, difference,
             difference_reason, meter_gap_note, cost_total, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    id, business, date, shiftName, liters, expected, collected, credit, difference, difference ? reason : null, gaps.length ? gaps.join('; ') : null,
+    id, business, date, shiftName, liters, expected, collected, credit, difference, reason, gaps.length ? gaps.join('; ') : null,
     cost, str(b.note, 'Note', { max: 300 }), ctx.user.id, nowIso());
   for (const r of readings) {
     tx.run(`INSERT INTO fuel_shift_readings (id, shift_id, pump_id, tank_id, product_id, opening_meter, closing_meter, liters, unit_price, amount, unit_cost)
@@ -76,7 +85,7 @@ export async function createShift(ctx: Ctx) {
   for (const p of payments) tx.run('INSERT INTO fuel_shift_payments (id, shift_id, method_id, amount) VALUES (?,?,?,?)', newId(), id, p.method, p.amount);
   for (const c of credits) tx.run('INSERT INTO fuel_shift_payments (id, shift_id, customer_id, amount) VALUES (?,?,?,?)', newId(), id, c.customer, c.amount);
   tx.journal({ business, date, type: 'fuel_shift', refType: 'fuel_shift', refId: id, amount: expected,
-    memo: `Fuel sales ${shiftName} shift: ${liters} L${difference ? ` (${difference < 0 ? 'short' : 'over'} ${(Math.abs(difference) / 100).toFixed(2)})` : ''}` }, [
+    memo: `Fuel sales ${shiftName}: ${liters} L${difference ? ` (${difference < 0 ? 'outstanding' : 'over'} ${(Math.abs(difference) / 100).toFixed(2)})` : ''}` }, [
     { account: 'sales', amount: -expected },
     ...payments.map((p): Line => ({ account: 'cash', amount: p.amount, method: p.method })),
     ...credits.map((c): Line => ({ account: 'receivable', amount: c.amount, customer: c.customer })),
@@ -204,4 +213,93 @@ export async function reconciliation(ctx: Ctx) {
      FROM fuel_shift_readings r JOIN fuel_shifts s ON s.id = r.shift_id JOIN products p ON p.id = r.product_id
      WHERE s.business_id = 'fuel' AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ? GROUP BY p.id ORDER BY p.name`, from, to);
   return { from, to, tanks, days, byFuel };
+}
+
+/** Money that arrives after the sales were recorded: it settles (part of) the outstanding amount. */
+export async function settleShift(ctx: Ctx) {
+  const business = requireBiz(ctx, 'fuel', 'fuel');
+  const sh = await first<any>(ctx.db, 'SELECT * FROM fuel_shifts WHERE id = ?', ctx.params.id);
+  if (!sh) throw new HttpError(404, 'Not found');
+  if (sh.status !== 'completed') throw new HttpError(409, 'This entry was cancelled');
+  if (sh.difference >= 0) throw new HttpError(409, 'Nothing is outstanding on this entry');
+  const date = today();
+  await assertDayOpen(ctx.db, business, date);
+  const { payments, credits } = await receipts(ctx, business, ctx.body);
+  const received = payments.reduce((t, p) => t + p.amount, 0);
+  const debts = credits.reduce((t, c) => t + c.amount, 0);
+  const total = received + debts;
+  if (total <= 0) throw bad('Enter what was received');
+  if (total > -sh.difference) throw bad(`Only ${(-sh.difference / 100).toFixed(2)} is outstanding`);
+  const tx = new Tx(ctx.db, ctx.user);
+  for (const p of payments) tx.run('INSERT INTO fuel_shift_payments (id, shift_id, method_id, amount, settled_at) VALUES (?,?,?,?,?)', newId(), sh.id, p.method, p.amount, nowIso());
+  for (const c of credits) tx.run('INSERT INTO fuel_shift_payments (id, shift_id, customer_id, amount, settled_at) VALUES (?,?,?,?,?)', newId(), sh.id, c.customer, c.amount, nowIso());
+  tx.run(`UPDATE fuel_shifts SET collected_amount = collected_amount + ?, credit_amount = credit_amount + ?, difference = difference + ? WHERE id = ? AND status = 'completed'`, received, debts, total, sh.id);
+  tx.journal({ business, date, type: 'fuel_settle', refType: 'fuel_shift', refId: sh.id, amount: total,
+    memo: `Fuel sales ${sh.entry_date} ${sh.shift_name}: ${(total / 100).toFixed(2)} received later` }, [
+    ...payments.map((p): Line => ({ account: 'cash', amount: p.amount, method: p.method })),
+    ...credits.map((c): Line => ({ account: 'receivable', amount: c.amount, customer: c.customer })),
+    { account: 'cash_diff', amount: -total, category: 'Fuel shift' },
+  ]);
+  tx.audit('settle', 'fuel_shift', sh.id, business, { received, debts, remaining: -sh.difference - total });
+  return tx.commit(idemKey(ctx), { id: sh.id, remaining: -sh.difference - total });
+}
+
+// ── Exchange rate (USD → Somaliland Shillings) ───────────────────
+/** The rate in force on a day: the latest one set on or before it. */
+export function rateOn(rates: { rate_date: string; rate: number; set_at: string }[], day: string): number | null {
+  let best: { rate_date: string; rate: number; set_at: string } | null = null;
+  for (const r of rates) {
+    if (r.rate_date > day) continue;
+    if (!best || r.rate_date > best.rate_date || (r.rate_date === best.rate_date && r.set_at > best.set_at)) best = r;
+  }
+  return best?.rate ?? null;
+}
+
+export async function getRates(ctx: Ctx) {
+  bizScope(ctx, 'fuel');
+  const history = await all<any>(ctx.db, `SELECT r.id, r.rate_date, r.rate, r.set_at, u.full_name AS set_by_name FROM exchange_rates r JOIN users u ON u.id = r.set_by
+                                          ORDER BY r.rate_date DESC, r.set_at DESC LIMIT 60`);
+  const t = today();
+  const current = history.find((r) => r.rate_date <= t) ?? null;   // newest first, so the first one on or before today
+  return { today: t, current, setToday: current?.rate_date === t, history };
+}
+
+export async function setRate(ctx: Ctx) {
+  const business = requireBiz(ctx, 'fuel', 'catalog');
+  const rate = Math.round(Number(String(ctx.body.rate ?? '').replace(/,/g, '')) * 100) / 100;
+  if (!Number.isFinite(rate) || rate < 1 || rate > 10_000_000) throw bad('Enter how many Somaliland Shillings equal $1 (for example 11,900)');
+  const date = entryDate(ctx.body.date);
+  const id = newId();
+  const tx = new Tx(ctx.db, ctx.user);
+  tx.run('INSERT INTO exchange_rates (id, rate_date, rate, set_by, set_at) VALUES (?,?,?,?,?)', id, date, rate, ctx.user.id, nowIso());
+  tx.audit('set_rate', 'exchange_rate', id, business, { date, rate });
+  return tx.commit(idemKey(ctx), { id, rate });
+}
+
+// ── Daily accounting ─────────────────────────────────────────────
+/**
+ * Per day: sales (litres × price), how it was received per payment method,
+ * debts, and what is still outstanding — with the day's SLSH rate.
+ */
+export async function days(ctx: Ctx) {
+  bizScope(ctx, 'fuel');
+  const from = ctx.url.searchParams.get('from') || today(-6);
+  const to = ctx.url.searchParams.get('to') || today();
+  const [rows, byMethod, methods, rates] = await Promise.all([
+    all<any>(ctx.db, `SELECT entry_date, COUNT(*) AS entries, ROUND(SUM(total_liters), 3) AS liters, SUM(expected_amount) AS sales,
+        SUM(collected_amount) AS received, SUM(credit_amount) AS debts, SUM(difference) AS difference
+      FROM fuel_shifts WHERE business_id = 'fuel' AND status = 'completed' AND entry_date BETWEEN ? AND ? GROUP BY entry_date ORDER BY entry_date DESC`, from, to),
+    all<any>(ctx.db, `SELECT s.entry_date, fp.method_id, SUM(fp.amount) AS amount FROM fuel_shift_payments fp JOIN fuel_shifts s ON s.id = fp.shift_id
+      WHERE s.business_id = 'fuel' AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ? AND fp.method_id IS NOT NULL GROUP BY s.entry_date, fp.method_id`, from, to),
+    all<any>(ctx.db, 'SELECT id, name FROM payment_methods WHERE active = 1 ORDER BY sort'),
+    all<any>(ctx.db, 'SELECT rate_date, rate, set_at FROM exchange_rates WHERE rate_date <= ?', to),
+  ]);
+  return {
+    from, to, methods,
+    days: rows.map((d) => ({
+      ...d, outstanding: -d.difference,   // negative = more received than sales
+      by_method: Object.fromEntries(byMethod.filter((m) => m.entry_date === d.entry_date).map((m) => [m.method_id, m.amount])),
+      rate: rateOn(rates, d.entry_date),
+    })),
+  };
 }

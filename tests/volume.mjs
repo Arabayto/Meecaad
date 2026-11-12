@@ -103,7 +103,7 @@ async function main() {
       for (const t of setup.tanks) await post('/fuel/dips', { tank: t.id, measuredQty: Math.max(0, Math.round(t.stock_qty - 5)), reason: 'evaporation', date });
     }
     // Close each business's day with the counted money equal to expected.
-    for (const biz of ['store', 'fuel']   /* the restaurant has no daily closing */) {
+    for (const biz of ['store']   /* the restaurant and the fuel station have no daily closing */) {
       const pre = await get(`/closing/preview?business=${biz}&date=${date}`);
       await post('/closing', { business: biz, date, counted: Object.fromEntries(pre.lines.map((l) => [l.method_id, l.expected])) });
     }
@@ -135,6 +135,8 @@ async function main() {
     'Customers (all businesses)': ['/customers?business=all'],
     'Money & accounts': ['/balances?business=all', `/money?business=all&from=${dayStr(today, 30)}&to=${today}`],
     'Fuel station': ['/fuel/setup', `/fuel/shifts?from=${dayStr(today, 6)}&to=${today}`, '/customers?business=fuel'],
+    'Fuel dashboard (30 days)': [`/fuel/days?from=${dayStr(today, 29)}&to=${today}`, '/rates', '/dashboard?business=fuel'],
+    'Fuel daily reconciliation (month)': [`/fuel/days?from=${dayStr(today, 30)}&to=${today}`, `/fuel/reconciliation?from=${dayStr(today, 30)}&to=${today}`],
     'Fuel reconciliation': [`/fuel/reconciliation?from=${dayStr(today, 6)}&to=${today}`],
     'Daily closing': [`/closing/preview?business=store&date=${today}`, '/closing?business=all'],
     'Reports (month)': [`/reports/summary?business=all&from=${month}&to=${today}`],

@@ -36,6 +36,11 @@ async function shiftStart(db: D1Database, business: string, userId: string) {
 const notDrawer = placeholders(NOT_DRAWER);
 /** Business day (UTC+3) on which a moment fell. */
 const localDay = (ts: string | null | undefined) => (ts ? new Date(Date.parse(ts) + 3 * 3600_000).toISOString().slice(0, 10) : null);
+/** UTC moments between which business days `from`..`to` (East Africa Time) fall. */
+const dayBounds = (from: string, to: string): [string, string] => [
+  new Date(Date.parse(from + 'T00:00:00Z') - 3 * 3600_000).toISOString(),
+  new Date(Date.parse(addDays(to, 1) + 'T00:00:00Z') - 3 * 3600_000).toISOString(),
+];
 
 /** What one person's open shift contains, per payment method. */
 async function openShift(db: D1Database, business: string, userId: string) {
@@ -169,7 +174,7 @@ export async function listShifts(ctx: Ctx) {
   return all(ctx.db, `SELECT s.*, u.full_name AS user_name, h.full_name AS handed_to_name, r.full_name AS reopened_by_name,
       (SELECT MAX(x.to_ts) FROM shift_closings x WHERE x.business_id = s.business_id AND x.user_id = s.user_id AND x.status = 'closed') = s.to_ts AS is_latest
     FROM shift_closings s JOIN users u ON u.id = s.user_id JOIN users h ON h.id = s.handed_to LEFT JOIN users r ON r.id = s.reopened_by
-    WHERE s.business_id = ? AND s.closed_at >= ? AND s.closed_at < ? ORDER BY s.closed_at DESC LIMIT 500`, business, from, addDays(to, 1));
+    WHERE s.business_id = ? AND s.closed_at >= ? AND s.closed_at < ? ORDER BY s.closed_at DESC LIMIT 500`, business, ...dayBounds(from, to));
 }
 
 export async function getShift(ctx: Ctx) {
@@ -224,9 +229,9 @@ export async function shiftSummary(ctx: Ctx) {
         SUM(CASE WHEN s.total_difference < 0 THEN s.total_difference ELSE 0 END) AS short, SUM(CASE WHEN s.total_difference > 0 THEN s.total_difference ELSE 0 END) AS over,
         SUM(s.total_difference) AS difference
       FROM shift_closings s JOIN users u ON u.id = s.user_id WHERE s.business_id = ? AND s.status = 'closed' AND s.closed_at >= ? AND s.closed_at < ?
-      GROUP BY s.user_id ORDER BY difference`, business, from, addDays(to, 1)),
-    all(ctx.db, `SELECT substr(s.closed_at, 1, 10) AS day, COUNT(*) AS shifts, SUM(s.sales_total) AS sales, SUM(s.total_difference) AS difference
-      FROM shift_closings s WHERE s.business_id = ? AND s.status = 'closed' AND s.closed_at >= ? AND s.closed_at < ? GROUP BY 1 ORDER BY 1 DESC`, business, from, addDays(to, 1)),
+      GROUP BY s.user_id ORDER BY difference`, business, ...dayBounds(from, to)),
+    all(ctx.db, `SELECT date(s.closed_at, '+3 hours') AS day, COUNT(*) AS shifts, SUM(s.sales_total) AS sales, SUM(s.total_difference) AS difference
+      FROM shift_closings s WHERE s.business_id = ? AND s.status = 'closed' AND s.closed_at >= ? AND s.closed_at < ? GROUP BY 1 ORDER BY 1 DESC`, business, ...dayBounds(from, to)),
   ]);
   return { from, to, cashiers, days };
 }

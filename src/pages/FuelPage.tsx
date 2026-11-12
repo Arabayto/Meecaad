@@ -1,213 +1,12 @@
-import { Fragment, useEffect, useState } from 'react';
-import { Fuel, Printer, Plus } from 'lucide-react';
+import { useState } from 'react';
+import { Printer, Plus } from 'lucide-react';
 import { get, money, num, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
-import { Tabs } from '../components/Tabs';
-import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, Stat, addDays, fmtTime, useLoad, useSubmit, type PayLine } from '../components/ui';
+import { DateRange, ErrorBox, Field, Money, MoneyInput, addDays, useLoad, useSubmit } from '../components/ui';
 
-export function FuelPage() {
-  const { can } = useAuth();
-  const [tab, setTab] = useState(can('fuel') ? 'shift' : 'reconcile');
-  const setup = useLoad(() => get('/fuel/setup'), []);
-  const tabs = [
-    ...(can('fuel') ? [{ key: 'shift', label: 'Record shift readings' }] : []),
-    { key: 'shifts', label: 'Shifts' },
-    ...(can('fuel') ? [{ key: 'dips', label: 'Tank dips' }] : []),
-    { key: 'reconcile', label: 'Fuel reconciliation' },
-    ...(can('catalog') ? [{ key: 'setup', label: 'Tanks & pumps' }] : []),
-  ];
-  const tanks = setup.data?.tanks ?? [];
-  return (
-    <div className="module-page">
-      <PageHeader icon={<Fuel size={22} />} title="Fuel station" subtitle="Pump meters → litres sold → money expected. Tank dips → fuel actually left." />
-      <section className="stat-grid">
-        {tanks.filter((t: any) => t.active).map((t: any) => (
-          <Stat key={t.id} label={`${t.name} · ${t.fuel_name}`} value={`${num(t.stock_qty)} L`} tone={t.stock_qty < 0 ? 'red' : undefined}
-            sub={`${t.capacity ? `${Math.round((t.stock_qty / t.capacity) * 100)}% of ${num(t.capacity)} L · ` : ''}${money(t.sale_price)}/L`} />
-        ))}
-      </section>
-      <ErrorBox error={setup.error} />
-      <div className="panel">
-        <Tabs tabs={tabs} activeTab={tab} onTabChange={setTab} />
-        {tab === 'shift' && <ShiftForm setup={setup.data} onSaved={() => { setup.reload(); setTab('shifts'); }} />}
-        {tab === 'shifts' && <ShiftList onChange={setup.reload} />}
-        {tab === 'dips' && <Dips tanks={tanks} onSaved={setup.reload} />}
-        {tab === 'reconcile' && <Reconciliation />}
-        {tab === 'setup' && <Setup data={setup.data} onChange={setup.reload} />}
-      </div>
-    </div>
-  );
-}
-
-function ShiftForm({ setup, onSaved }: { setup: any; onSaved: () => void }) {
-  const { today } = useAuth();
-  const pumps = (setup?.pumps ?? []).filter((p: any) => p.active);
-  const customers = useLoad(() => get('/customers', { business: 'fuel' }), []);
-  const [date, setDate] = useState(today);
-  const [shiftName, setShiftName] = useState('Day');
-  const [closing, setClosing] = useState<Record<string, string>>({});
-  const [opening, setOpening] = useState<Record<string, string>>({});
-  const [payments, setPayments] = useState<PayLine[]>([{ method: 'cash', amount: '' }, { method: 'zaad', amount: '' }, { method: 'edahab', amount: '' }]);
-  const [credits, setCredits] = useState<{ customer: string; amount: string }[]>([]);
-  const [reason, setReason] = useState('');
-  const [note, setNote] = useState('');
-  const { run, busy } = useSubmit();
-
-  useEffect(() => { setOpening(Object.fromEntries(pumps.map((p: any) => [p.id, String(p.last_meter)]))); }, [setup]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const rows = pumps.map((p: any) => {
-    const o = Number(opening[p.id] ?? p.last_meter);
-    const c = closing[p.id] === undefined || closing[p.id] === '' ? null : Number(closing[p.id]);
-    const liters = c === null ? 0 : Math.round((c - o) * 1000) / 1000;
-    return { p, o, c, liters, amount: Math.round(Math.max(liters, 0) * p.sale_price), bad: c !== null && c < o, gap: Math.abs(o - p.last_meter) > 0.0005 };
-  });
-  const entered = rows.filter((r: any) => r.c !== null);
-  const expected = entered.reduce((s: number, r: any) => s + r.amount, 0);
-  const liters = entered.reduce((s: number, r: any) => s + r.liters, 0);
-  const collected = payments.reduce((s, p) => s + toCents(p.amount), 0);
-  const credit = credits.reduce((s, c) => s + toCents(c.amount), 0);
-  const diff = collected + credit - expected;
-
-  const save = async () => {
-    const r = await run((key) => post('/fuel/shifts', {
-      date, shiftName, note, differenceReason: reason,
-      readings: entered.map((r: any) => ({ pump: r.p.id, opening: r.o, closing: r.c })),
-      payments: payments.map((p) => ({ method: p.method, amount: toCents(p.amount) })),
-      credits: credits.map((c) => ({ customer: c.customer, amount: toCents(c.amount) })),
-    }, key), 'Shift saved');
-    if (r) { setClosing({}); setCredits([]); setReason(''); setNote(''); setPayments(payments.map((p) => ({ ...p, amount: '' }))); onSaved(); }
-  };
-
-  if (!pumps.length) return <div className="mc-note">No pumps yet. The owner or manager adds tanks and pumps in "Tanks & pumps".</div>;
-  return (
-    <div className="form-stack">
-      <div className="form-row-3">
-        <Field label="Date"><input type="date" className="form-input" value={date} max={today} onChange={(e) => setDate(e.target.value)} /></Field>
-        <Field label="Shift"><input className="form-input" list="shift-names" value={shiftName} onChange={(e) => setShiftName(e.target.value)} />
-          <datalist id="shift-names"><option value="Day" /><option value="Night" /><option value="Morning" /><option value="Evening" /></datalist></Field>
-        <Field label="Note"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-      </div>
-      <div className="table-wrap lines-table">
-        <table>
-          <thead><tr><th>Pump</th><th>Fuel</th><th>Opening meter</th><th>Closing meter</th><th className="num">Litres sold</th><th className="num">Price</th><th className="num">Money expected</th></tr></thead>
-          <tbody>
-            {rows.map((r: any) => (
-              <tr key={r.p.id}>
-                <td><strong>{r.p.name}</strong><div className="small muted">{r.p.tank_name}</div></td>
-                <td>{r.p.fuel_name}</td>
-                <td><input className="form-input" inputMode="decimal" style={{ width: 130 }} value={opening[r.p.id] ?? String(r.p.last_meter)} onChange={(e) => setOpening({ ...opening, [r.p.id]: e.target.value })} />
-                  {r.gap && <div className="small" style={{ color: '#b91c1c' }}>Last closing was {num(r.p.last_meter)}</div>}</td>
-                <td><input className="form-input" inputMode="decimal" style={{ width: 130 }} value={closing[r.p.id] ?? ''} onChange={(e) => setClosing({ ...closing, [r.p.id]: e.target.value })} placeholder="Read the meter" />
-                  {r.bad && <div className="small" style={{ color: '#b91c1c' }}>Lower than opening</div>}</td>
-                <td className="num">{r.c !== null ? num(r.liters) : '—'}</td>
-                <td className="num">{money(r.p.sale_price)}</td>
-                <td className="num">{r.c !== null ? money(r.amount) : '—'}</td>
-              </tr>
-            ))}
-            <tr><td colSpan={4}><strong>Total</strong></td><td className="num"><strong>{num(liters)} L</strong></td><td></td><td className="num"><strong>{money(expected)}</strong></td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div className="grid-2">
-        <Field label="Money received (count it)"><PaymentsEditor value={payments} onChange={setPayments} /></Field>
-        <Field label="Fuel given on credit">
-          <div className="pay-lines">
-            {credits.map((c, i) => (
-              <div className="pay-line" key={i}>
-                <PartySelect kind="customers" value={c.customer} items={customers.data ?? []} placeholder="Choose customer…" onCreated={customers.reload}
-                  onChange={(v) => setCredits(credits.map((x, j) => (j === i ? { ...x, customer: v } : x)))} />
-                <MoneyInput value={c.amount} onChange={(v) => setCredits(credits.map((x, j) => (j === i ? { ...x, amount: v } : x)))} />
-                <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCredits(credits.filter((_, j) => j !== i))}>✕</button>
-              </div>
-            ))}
-            <div><button type="button" className="btn btn-ghost btn-xs" onClick={() => setCredits([...credits, { customer: '', amount: '' }])}>+ Add credit customer</button></div>
-          </div>
-        </Field>
-      </div>
-
-      <div className="stat-grid">
-        <Stat label="Expected from meters" value={money(expected)} />
-        <Stat label="Received + credit" value={money(collected + credit)} sub={`Cash/mobile ${money(collected)} · credit ${money(credit)}`} />
-        <Stat label={diff < 0 ? 'Short' : diff > 0 ? 'Over' : 'Difference'} value={money(Math.abs(diff))} tone={diff !== 0 ? 'red' : 'green'} />
-      </div>
-      {diff !== 0 && entered.length > 0 && (
-        <Field label="Explain the difference (required)"><input className="form-input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. attendant short, wrong change, test fuel returned" /></Field>
-      )}
-      <div className="form-actions">
-        <button type="button" className="btn btn-primary" disabled={busy || !entered.length || entered.some((r: any) => r.bad) || credits.some((c) => !c.customer) || (diff !== 0 && !reason.trim())} onClick={save}>
-          Save shift
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ShiftList({ onChange }: { onChange: () => void }) {
-  const { today, can } = useAuth();
-  const [from, setFrom] = useState(addDays(today, -6));
-  const [to, setTo] = useState(today);
-  const list = useLoad(() => get('/fuel/shifts', { from, to }), [from, to]);
-  const [open, setOpen] = useState<any>(null);
-  const [voiding, setVoiding] = useState(false);
-  return (
-    <>
-      <div style={{ marginBottom: 12 }}><DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} /></div>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Shift</th><th className="num">Litres</th><th className="num">Expected</th><th className="num">Received</th><th className="num">Credit</th><th className="num">Difference</th><th>Status</th><th>By</th></tr></thead>
-          <tbody>
-            {(list.data ?? []).map((s: any) => (
-              <tr key={s.id} className="tr--clickable" onClick={async () => setOpen(await get(`/fuel/shifts/${s.id}`))}>
-                <td>{s.entry_date}</td><td>{s.shift_name}</td><td className="num">{num(s.total_liters)}</td>
-                <td className="num">{money(s.expected_amount)}</td><td className="num">{money(s.collected_amount)}</td><td className="num">{money(s.credit_amount)}</td>
-                <td className="num"><Money c={s.difference} signed />{s.difference_reason && <div className="small muted">{s.difference_reason}</div>}</td>
-                <td>{s.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : s.meter_gap_note ? <StatusBadge label="Meter gap" tone="red" /> : <StatusBadge label="Saved" tone="green" />}</td>
-                <td className="small muted">{s.created_by_name}</td>
-              </tr>
-            ))}
-            {!list.loading && !list.data?.length && <tr><td colSpan={9} className="muted">No shifts in this period.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      <Modal open={Boolean(open)} onClose={() => setOpen(null)} title={open ? `Shift ${open.entry_date} · ${open.shift_name}` : ''} width="lg"
-        footer={open && <>
-          {can('void') && open.status === 'completed' && <button type="button" className="btn btn-danger" onClick={() => setVoiding(true)}>Cancel shift</button>}
-          <button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>
-        </>}>
-        {open && (
-          <div className="print-area form-stack">
-            <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
-            <h3 className="print-only">Meecaad Fuel Station — shift {open.entry_date} {open.shift_name}</h3>
-            {open.status === 'voided' && <div className="mc-error">Cancelled by {open.voided_by_name}: {open.void_reason}</div>}
-            {open.meter_gap_note && <div className="mc-error">Meter gap: {open.meter_gap_note}</div>}
-            <table>
-              <thead><tr><th>Pump</th><th>Fuel</th><th className="num">Opening</th><th className="num">Closing</th><th className="num">Litres</th><th className="num">Price</th><th className="num">Amount</th></tr></thead>
-              <tbody>{open.readings.map((r: any) => (
-                <tr key={r.id}><td>{r.pump_name}</td><td>{r.fuel_name}</td><td className="num">{num(r.opening_meter)}</td><td className="num">{num(r.closing_meter)}</td>
-                  <td className="num">{num(r.liters)}</td><td className="num">{money(r.unit_price)}</td><td className="num">{money(r.amount)}</td></tr>
-              ))}</tbody>
-            </table>
-            <div className="kv">
-              <span>Expected from meters</span><span>{money(open.expected_amount)}</span>
-              {open.payments.map((p: any) => <Fragment key={p.id}><span>{p.method_name ? `Received ${p.method_name}` : `Credit: ${p.customer_name}`}</span><span>{money(p.amount)}</span></Fragment>)}
-              <span className="kv-total">Difference</span><span className="kv-total"><Money c={open.difference} signed /></span>
-            </div>
-            {open.difference_reason && <p className="small">Reason: {open.difference_reason}</p>}
-            <p className="small muted">Recorded by {open.created_by_name} at {fmtTime(open.created_at)}</p>
-          </div>
-        )}
-      </Modal>
-      {open && <ReasonModal open={voiding} onClose={() => setVoiding(false)} title="Cancel this shift?" action={`/fuel/shifts/${open.id}/void`} confirmLabel="Cancel shift"
-        message="The litres go back to the tank, the pump meters go back to their opening readings, and the money is reversed. Only the latest shift of a pump can be cancelled."
-        onDone={() => { setOpen(null); list.reload(); onChange(); }} />}
-    </>
-  );
-}
-
-function Dips({ tanks, onSaved }: { tanks: any[]; onSaved: () => void }) {
+export function Dips({ tanks, onSaved }: { tanks: any[]; onSaved: () => void }) {
   const { today } = useAuth();
   const list = useLoad(() => get('/fuel/dips'), []);
   const [tank, setTank] = useState('');
@@ -252,7 +51,7 @@ function Dips({ tanks, onSaved }: { tanks: any[]; onSaved: () => void }) {
   );
 }
 
-function Reconciliation() {
+export function Reconciliation() {
   const { today } = useAuth();
   const [from, setFrom] = useState(addDays(today, -6));
   const [to, setTo] = useState(today);
@@ -311,7 +110,7 @@ function Reconciliation() {
   );
 }
 
-function Setup({ data, onChange }: { data: any; onChange: () => void }) {
+export function Setup({ data, onChange }: { data: any; onChange: () => void }) {
   const products = useLoad(() => get('/products', { business: 'fuel' }), []);
   const fuels = (products.data ?? []).filter((p: any) => p.kind === 'fuel' && p.active);
   const [tank, setTank] = useState({ product: '', name: '', capacity: '', openingQty: '', openingCost: '' });
@@ -328,7 +127,7 @@ function Setup({ data, onChange }: { data: any; onChange: () => void }) {
   };
   return (
     <div className="form-stack">
-      {!fuels.length && <div className="mc-warn">First add the fuel types (e.g. Petrol, Diesel) with their price per litre in Fuel Types &amp; Prices.</div>}
+      {!fuels.length && <div className="mc-warn">First add the fuel types (e.g. Petrol, Diesel) with their price per litre in Settings → Fuel prices.</div>}
       <div className="grid-2">
         <div className="form-stack">
           <h3 style={{ margin: 0 }}>Add a tank</h3>
@@ -381,7 +180,7 @@ function Setup({ data, onChange }: { data: any; onChange: () => void }) {
           </div>
         </Modal>
       )}
-      <p className="small muted">Fuel prices are changed in Fuel Types &amp; Prices (every change is kept in the price history). Current price: {fuels.map((f: any) => `${f.name} ${money(f.sale_price)}/L`).join(', ') || '—'}</p>
+      <p className="small muted">Fuel prices are changed in Settings → Fuel prices (every change is kept in the price history). Current price: {fuels.map((f: any) => `${f.name} ${money(f.sale_price)}/L`).join(', ') || '—'}</p>
     </div>
   );
 }

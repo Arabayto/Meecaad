@@ -39,17 +39,13 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Daily Closing', path: '/closing', icon: ClipboardCheck, perms: ['close'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
   ],
+  // The fuel station is kept simple: record the sales, see the day, read the reports, set the rate.
   fuel: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
-    { label: 'Pumps & Shifts', path: '/pumps', icon: Gauge, perms: ['fuel', 'reports'] },
-    { label: 'Fuel Types & Prices', path: '/fuels', icon: Fuel, perms: ['catalog'] },
-    { label: 'Deliveries', path: '/purchases', icon: Truck, perms: ['purchase'] },
-    { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
+    { label: 'Sales', path: '/sales', icon: Fuel, perms: ['fuel', 'reports'] },
     { label: 'Credit Customers', path: '/customers', icon: UserCheck, perms: ['fuel', 'reports'] },
-    { label: 'Suppliers', path: '/suppliers', icon: Users, perms: ['purchase'] },
-    { label: 'Money', path: '/money', icon: Wallet, perms: ['money'] },
-    { label: 'Daily Closing', path: '/closing', icon: ClipboardCheck, perms: ['close'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
+    { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },
   ],
   admin: [
     { label: 'All Businesses', path: '/', icon: Home, perms: ['users'] },

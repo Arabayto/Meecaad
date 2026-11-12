@@ -14,7 +14,7 @@ import { PurchasesPage } from './pages/PurchasesPage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { PartiesPage } from './pages/PartiesPage';
 import { MoneyPage } from './pages/MoneyPage';
-import { FuelPage } from './pages/FuelPage';
+import { FuelDashboard, FuelReports, FuelSalesPage, FuelSettings } from './pages/FuelStation';
 import { ClosingPage } from './pages/ClosingPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { UsersPage } from './pages/UsersPage';
@@ -66,6 +66,7 @@ function Need({ perms, children }: { perms: Perm[]; children: JSX.Element }) {
 function PortalHome() {
   const { can, portal, path, user } = useAuth();
   if (portal === 'restaurant' && can('reports')) return <RestaurantDashboard />;
+  if (portal === 'fuel' && can('reports')) return <FuelDashboard />;
   if (portal === 'admin' || can('reports')) return <DashboardPage />;
   const first = visibleNav(portal!, can, Boolean(user?.owner)).find((n) => n.path !== '/');
   return first ? <Navigate to={path(first.path)} replace /> : <div className="mc-note">Your account has no pages in this portal. Ask the owner.</div>;
@@ -96,18 +97,19 @@ function PortalPage() {
     shift: [['sell'], <ShiftPage />],
     users: [['users'], <UsersPage />],
     closings: [['reports'], <ClosingsPage />],
+  } : p === 'fuel' ? {
+    // The fuel station: sales, credit customers, reports and settings (rate, prices, pumps, deliveries, expenses).
+    sales: [['fuel', 'reports'], <FuelSalesPage />],
+    customers: [['fuel', 'reports'], <PartiesPage kind="customers" />],
+    reports: [['reports'], <FuelReports />],
+    settings: [['catalog'], <FuelSettings />],
   } : {
-    ...(p === 'fuel' ? {
-      pumps: [['fuel', 'reports'], <FuelPage />],
-      fuels: [['catalog'], <StockPage view="fuels" />],
-    } : {
-      sell: [['sell'], <SellPage />],
-      sales: [['sell', 'reports'], <SalesPage />],
-      stock: [['stock', 'catalog'], <StockPage view="products" />],
-    }),
+    sell: [['sell'], <SellPage />],
+    sales: [['sell', 'reports'], <SalesPage />],
+    stock: [['stock', 'catalog'], <StockPage view="products" />],
     purchases: [['purchase'], <PurchasesPage />],
     expenses: [['expense'], <ExpensesPage />],
-    customers: [p === 'fuel' ? ['fuel', 'reports'] : ['sell', 'reports'], <PartiesPage kind="customers" />],
+    customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     suppliers: [['purchase'], <PartiesPage kind="suppliers" />],
     money: [['money'], <MoneyPage />],
     closing: [['close'], <ClosingPage />],

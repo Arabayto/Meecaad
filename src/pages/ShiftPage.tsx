@@ -12,7 +12,8 @@ import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal,
 
 const R = 'restaurant';
 const COLS: [string, string][] = [['sales_in', 'Sales'], ['collections', 'Debts collected'], ['expenses_out', 'Expenses paid'], ['other', 'Other']];
-const fmtDay = (ts: string) => (ts ? ts.slice(0, 10) : '');
+/** Business day (East Africa Time, UTC+3) of a stored UTC moment. */
+const fmtDay = (ts: string) => (ts ? new Date(Date.parse(ts) + 3 * 3600_000).toISOString().slice(0, 10) : '');
 
 // ── Close My Shift ──────────────────────────────────────────────
 export function ShiftPage() {
@@ -221,7 +222,7 @@ function ShiftsTab({ from, to }: { from: string; to: string }) {
           <tbody>
             {filter.shown.map((c: any) => (
               <tr key={c.id} className="tr--clickable" onClick={async () => setSlip(await get(`/shifts/${c.id}`))}>
-                <td>{fmtTime(c.closed_at)}<div className="small muted">{c.closed_at.slice(0, 10)}</div></td>
+                <td>{fmtTime(c.closed_at)}<div className="small muted">{fmtDay(c.closed_at)}</div></td>
                 <td><strong>{c.user_name}</strong></td>
                 <td className="num">{money(c.sales_total)}</td><td className="num">{money(c.expenses_total)}</td>
                 <td className="num">{money(c.total_expected)}</td><td className="num">{money(c.total_counted)}</td>
