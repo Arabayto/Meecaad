@@ -192,7 +192,8 @@ export async function summary(ctx: Ctx) {
                  FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'cash' GROUP BY business_id, entry_type ORDER BY business_id, entry_type`, ...scope, from, to),
     all(ctx.db, `SELECT s.business_id, si.product_id, si.name, ROUND(SUM(si.qty - si.returned_qty), 3) AS qty,
                    SUM(ROUND(si.line_total * (1.0 - si.returned_qty / si.qty) * (CASE WHEN s.subtotal > 0 THEN s.total * 1.0 / s.subtotal ELSE 0 END))) AS revenue,
-                   SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)) AS cost
+                   SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)) AS cost,
+                   (SELECT updated_at FROM product_images img WHERE img.product_id = si.product_id) AS image_v
                  FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.status = 'completed' AND s.business_id IN (${p}) AND s.entry_date BETWEEN ? AND ?
                  GROUP BY s.business_id, si.product_id ORDER BY revenue DESC LIMIT 30`, ...scope, from, to),
     scope.includes('fuel')
@@ -206,7 +207,15 @@ export async function summary(ctx: Ctx) {
     all(ctx.db, `SELECT business_id, SUM(debit) AS given, SUM(credit) AS collected
                  FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'receivable' GROUP BY business_id`, ...scope, from, to),
   ]);
-  return { business: ctx.url.searchParams.get('business') || 'all', from, to, scope, profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit };
+  const [methods, counts] = await Promise.all([
+    // Money taken for sales (net of refunds/cancellations), per payment method.
+    all(ctx.db, `SELECT t.business_id, t.method_id, pm.name AS method_name, SUM(t.debit - t.credit) AS total FROM daily_totals t JOIN payment_methods pm ON pm.id = t.method_id
+                 WHERE t.business_id IN (${p}) AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_shift', 'fuel_shift_void')
+                 GROUP BY t.business_id, t.method_id HAVING SUM(t.debit - t.credit) <> 0 ORDER BY pm.sort`, ...scope, from, to),
+    all(ctx.db, `SELECT business_id, entry_date, COUNT(*) AS sales FROM sales WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND status = 'completed'
+                 GROUP BY business_id, entry_date`, ...scope, from, to),
+  ]);
+  return { business: ctx.url.searchParams.get('business') || 'all', from, to, scope, profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit, methods, counts };
 }
 
 

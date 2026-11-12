@@ -346,13 +346,18 @@ try {
     assert.ok(teaRow.image_v, 'product list says it has a picture');
     const img = await fetch(`${BASE}/products/${tea}/image?v=1`, { headers: { Cookie: owner.cookie() } });
     assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
-    // No dashboard or reports inside the restaurant (the owner sees them in the owner admin).
+    // Restaurant dashboard/reports for its manager: sales, expenses, profit, payments by method, number of sales, best sellers.
     await owner.post('/users', { fullName: 'Rest manager', username: 'restman', password: 'rest-man-1', access: { restaurant: 'manager' } });
     const rm = client();
     await rm.post('/auth/login', { username: 'restman', password: 'rest-man-1' });
-    for (const path of ['/dashboard?business=restaurant', '/reports/summary?business=restaurant', '/reports/ledger?business=restaurant']) {
-      assert.equal((await rm.call('GET', path)).status, 403, path);
-    }
+    const rs = await rm.get('/reports/summary?business=restaurant');
+    const rp = rs.profit.restaurant;
+    assert.equal(rp.profit, rp.revenue - rp.expenses, 'restaurant profit = sales − expenses');
+    assert.equal(rs.methods.reduce((t, m) => t + m.total, 0) + rs.credit.reduce((t, c) => t + c.given, 0), rp.revenue, 'payments by method + credit = sales');
+    assert.equal(rs.counts.reduce((t, c) => t + c.sales, 0), (await rm.get('/sales?business=restaurant')).filter((x) => x.status === 'completed').length);
+    assert.ok(rs.topProducts.some((x) => x.product_id === tea));
+    assert.equal((await rm.call('GET', '/dashboard?business=restaurant')).status, 200);
+    assert.equal((await rm.call('GET', '/dashboard?business=store')).status, 403, 'only their own business');
     assert.ok((await owner.get('/dashboard?business=all')).scope.includes('restaurant'), 'owner admin still includes the restaurant');
     // Other businesses cannot reach restaurant tables, orders or pictures.
     const sc = client();

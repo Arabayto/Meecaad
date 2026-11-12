@@ -16,7 +16,7 @@ const BUSINESS_FEATURES: Record<string, Perm[]> = {
 };
 const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
-    restaurant: ['sell', 'expense', 'void', 'catalog'],   // no dashboard/reports in the restaurant portal
+    restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
   },
