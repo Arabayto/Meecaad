@@ -50,7 +50,7 @@ export const BUSINESS_FEATURES: Record<string, Perm[]> = {
 /** What each role may do, per business. */
 export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
-    restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
+    restaurant: ['sell', 'expense', 'void', 'catalog'],   // no dashboard/reports in the restaurant portal
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
   },

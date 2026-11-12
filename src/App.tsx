@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
-import { AppShell, visibleNav } from './layouts/AppShell';
+import { AppShell, PORTAL_NAV, visibleNav } from './layouts/AppShell';
 import { PortalProvider, useAuth, type Perm, type PortalId } from './contexts/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { PortalChooser } from './pages/PortalChooser';
@@ -63,7 +63,8 @@ function Need({ perms, children }: { perms: Perm[]; children: JSX.Element }) {
 /** A portal's landing page: its dashboard, or the first page this user can use there. */
 function PortalHome() {
   const { can, portal, path } = useAuth();
-  if (portal === 'admin' || can('reports')) return <DashboardPage />;
+  // Portals whose menu has a Dashboard open on it; the restaurant opens on New Order.
+  if (portal === 'admin' || (can('reports') && PORTAL_NAV[portal!].some((n) => n.path === '/'))) return <DashboardPage />;
   const first = visibleNav(portal!, can).find((n) => n.path !== '/');
   return first ? <Navigate to={path(first.path)} replace /> : <div className="mc-note">Your account has no pages in this portal. Ask the owner.</div>;
 }
@@ -89,7 +90,6 @@ function PortalPage() {
     menu: [['catalog'], <StockPage view="menu" />],
     expenses: [['expense'], <ExpensesPage />],
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
-    reports: [['reports'], <ReportsPage />],
   } : {
     ...(p === 'fuel' ? {
       pumps: [['fuel', 'reports'], <FuelPage />],

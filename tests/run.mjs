@@ -346,6 +346,14 @@ try {
     assert.ok(teaRow.image_v, 'product list says it has a picture');
     const img = await fetch(`${BASE}/products/${tea}/image?v=1`, { headers: { Cookie: owner.cookie() } });
     assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
+    // No dashboard or reports inside the restaurant (the owner sees them in the owner admin).
+    await owner.post('/users', { fullName: 'Rest manager', username: 'restman', password: 'rest-man-1', access: { restaurant: 'manager' } });
+    const rm = client();
+    await rm.post('/auth/login', { username: 'restman', password: 'rest-man-1' });
+    for (const path of ['/dashboard?business=restaurant', '/reports/summary?business=restaurant', '/reports/ledger?business=restaurant']) {
+      assert.equal((await rm.call('GET', path)).status, 403, path);
+    }
+    assert.ok((await owner.get('/dashboard?business=all')).scope.includes('restaurant'), 'owner admin still includes the restaurant');
     // Other businesses cannot reach restaurant tables, orders or pictures.
     const sc = client();
     await sc.post('/auth/login', { username: 'storecash', password: 'store-pass-1' });
