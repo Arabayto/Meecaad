@@ -28,10 +28,9 @@ function shrinkPicture(file: File): Promise<string> {
 
 const KIND_LABEL: Record<string, string> = { menu: 'Menu item', ingredient: 'Ingredient / kitchen stock', item: 'Product', fuel: 'Fuel type' };
 /** Each catalog page shows one kind of item of one business. */
-export type CatalogView = 'menu' | 'ingredients' | 'products' | 'fuels';
+export type CatalogView = 'menu' | 'products' | 'fuels';
 const VIEW: Record<CatalogView, { kind: string; title: string; add: string; unit: string; categoryHint: string | null }> = {
   menu: { kind: 'menu', title: 'Menu', add: 'Add dish or drink', unit: 'plate', categoryHint: 'e.g. Breakfast, Main dishes, Hot drinks, Juices' },
-  ingredients: { kind: 'ingredient', title: 'Ingredients & kitchen stock', add: 'Add ingredient', unit: 'kg', categoryHint: 'e.g. Meat, Vegetables, Spices, Dry goods' },
   products: { kind: 'item', title: 'Products & stock', add: 'Add product', unit: 'pcs', categoryHint: 'e.g. Rice & flour, Cooking oil, Soft drinks' },
   fuels: { kind: 'fuel', title: 'Fuel types & prices', add: 'Add fuel type', unit: 'L', categoryHint: null },
 };
@@ -44,13 +43,13 @@ export function StockPage({ view }: { view: CatalogView }) {
   const { business, can } = useAuth();
   const v = VIEW[view];
   const kind = v.kind;
+  const menu = view === 'menu';   // the restaurant menu: no stock, just pictures and prices
   const [tab, setTab] = useState('products');
   const [search, setSearch] = useState('');
   const products = useLoad(() => get('/products', { business, stats: '1' }), [business]);
   const moves = useLoad(() => (tab === 'history' ? get('/stock/movements', { business }) : Promise.resolve(null)), [business, tab]);
   const [edit, setEdit] = useState<any>(null);
   const [adjust, setAdjust] = useState<any>(null);
-  const [recipe, setRecipe] = useState<any>(null);
 
   const all = (products.data ?? []).filter((p: any) => p.kind === kind);
   // Category suggestions come only from this business's own items of this kind.
@@ -62,10 +61,10 @@ export function StockPage({ view }: { view: CatalogView }) {
   return (
     <div className="module-page">
       <PageHeader icon={<PackageSearch size={22} />} title={v.title}
-        subtitle={`Stock value ${money(value)} at cost · ${low} items low or out of stock`}
+        subtitle={menu ? `${rows.filter((p: any) => p.active).length} items on the menu` : `Stock value ${money(value)} at cost · ${low} items low or out of stock`}
         actions={can('catalog') && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> {v.add}</button>} />
       <div className="panel">
-        <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }]} activeTab={tab} onTabChange={setTab} />
+        {!menu && <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }]} activeTab={tab} onTabChange={setTab} />}
         <ErrorBox error={products.error} />
         {tab === 'products' ? (
           <>
@@ -73,21 +72,36 @@ export function StockPage({ view }: { view: CatalogView }) {
             {kind === 'fuel' && <div className="mc-note" style={{ marginBottom: 12 }}>Fuel stock is kept per tank: record deliveries in Deliveries and tank dips in Pumps &amp; Shifts. Change the price per litre here.</div>}
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Item</th><th>Type</th><th className="num">Selling price</th><th className="num">In stock</th><th className="num">{view === 'menu' ? 'Cost per item' : 'Avg cost'}</th><th className="num">Stock value</th><th className="num">Sold 30 days</th><th></th></tr></thead>
+                {menu ? (
+                  <>
+                    <thead><tr><th>Item</th><th className="num">Price</th><th className="num">Sold 30 days</th><th></th></tr></thead>
+                    <tbody>
+                      {rows.map((p: any) => (
+                        <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
+                          <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}><ItemPicture item={p} size={40} />
+                            <div><strong>{p.name}</strong>{!p.active && <span className="small muted"> (hidden)</span>}{p.category && <div className="small muted">{p.category}</div>}</div></div></td>
+                          <td className="num">{money(p.sale_price)}</td>
+                          <td className="num">{num(p.sold_30d)}</td>
+                          <td style={{ textAlign: 'right' }}>{can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>}</td>
+                        </tr>
+                      ))}
+                      {!products.loading && !rows.length && <tr><td colSpan={4} className="muted">No items yet. Add your dishes and drinks with a picture and price.</td></tr>}
+                    </tbody>
+                  </>
+                ) : (<>
+                <thead><tr><th>Item</th><th>Type</th><th className="num">Selling price</th><th className="num">In stock</th><th className="num">Avg cost</th><th className="num">Stock value</th><th className="num">Sold 30 days</th><th></th></tr></thead>
                 <tbody>
                   {rows.map((p: any) => {
                     const isLow = p.track_stock && p.kind !== 'fuel' && (p.stock_qty <= 0 || p.stock_qty <= p.reorder_level);
                     return (
                       <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                        <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>{(view === 'menu' || view === 'products') && <ItemPicture item={p} size={36} />}
+                        <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>{view === 'products' && <ItemPicture item={p} size={36} />}
                           <div><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</div></div></td>
                         <td className="small">{KIND_LABEL[p.kind]}{!p.active && ' (hidden)'}</td>
                         <td className="num">{p.kind === 'ingredient' ? '—' : money(p.sale_price)}{p.kind === 'fuel' && ' /L'}</td>
                         <td className="num">{p.track_stock ? <>{num(p.stock_qty)} {p.unit} {isLow && <StatusBadge label={p.stock_qty <= 0 ? 'Out' : 'Low'} tone={p.stock_qty <= 0 ? 'red' : 'yellow'} />}</>
-                          : p.kind === 'menu' ? (p.recipe_cost != null ? <span className="muted small">made from recipe</span> : <StatusBadge label="No recipe" tone="yellow" />) : <span className="muted">not tracked</span>}</td>
-                        <td className="num">{p.track_stock ? money(Math.round(p.avg_cost)) : p.recipe_cost != null ? (
-                          <>{money(p.recipe_cost)}<div className="small muted">{p.sale_price ? `margin ${Math.round(((p.sale_price - p.recipe_cost) / p.sale_price) * 100)}%` : ''}</div></>
-                        ) : '—'}</td>
+                          : <span className="muted">not tracked</span>}</td>
+                        <td className="num">{p.track_stock ? money(Math.round(p.avg_cost)) : '—'}</td>
                         <td className="num">{p.track_stock ? <Money c={p.stock_value} /> : '—'}</td>
                         <td className="num">{p.kind === 'ingredient' || p.kind === 'fuel' ? '—' : num(p.sold_30d)}</td>
                         <td>
@@ -95,7 +109,6 @@ export function StockPage({ view }: { view: CatalogView }) {
                             {p.track_stock && p.kind !== 'fuel' && (can('stock') || can('catalog')) && p.active ? (
                               <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAdjust(p)}>{p.kind === 'ingredient' ? 'Use / waste' : 'Waste / count'}</button>
                             ) : null}
-                            {p.kind === 'menu' && !p.track_stock && (can('catalog') || can('stock')) && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setRecipe(p)}>Recipe</button>}
                             {can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>}
                           </div>
                         </td>
@@ -104,6 +117,7 @@ export function StockPage({ view }: { view: CatalogView }) {
                   })}
                   {!products.loading && !rows.length && <tr><td colSpan={8} className="muted">No items yet.</td></tr>}
                 </tbody>
+                </>)}
               </table>
             </div>
           </>
@@ -130,7 +144,6 @@ export function StockPage({ view }: { view: CatalogView }) {
       </div>
 
       {edit && <ProductModal product={edit} view={view} categories={categories} onClose={() => setEdit(null)} onDone={() => { setEdit(null); products.reload(); }} />}
-      {recipe && <RecipeModal dish={recipe} onClose={() => setRecipe(null)} onDone={() => { setRecipe(null); products.reload(); }} />}
       {adjust && <AdjustModal product={adjust} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); products.reload(); moves.reload(); }} />}
     </div>
   );
@@ -143,19 +156,19 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
   const isNew = !product.id;
   const [f, setF] = useState({
     name: product.name ?? '', category: product.category ?? '', kind: product.kind ?? v.kind, unit: product.unit ?? v.unit,
-    sku: product.sku ?? '', salePrice: product.sale_price !== undefined ? fromCents(product.sale_price) : '', trackStock: product.track_stock ?? (v.kind === 'menu' ? 0 : 1),  // dishes are made from recipes; tick "count stock" for bottled drinks
+    sku: product.sku ?? '', salePrice: product.sale_price !== undefined ? fromCents(product.sale_price) : '', trackStock: product.track_stock ?? (v.kind === 'menu' ? 0 : 1),
     reorderLevel: String(product.reorder_level ?? ''), openingQty: '', openingCost: '', priceReason: '', active: product.active ?? 1,
   });
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
   const prices = useLoad(() => (isNew ? Promise.resolve([]) : get(`/products/${product.id}/prices`)), [product.id]);
   const { run, busy } = useSubmit();
   const priceChanged = !isNew && toCents(f.salePrice) !== product.sale_price;
-  const tracked = f.kind !== 'menu' || Boolean(f.trackStock);
+  const tracked = f.kind !== 'menu';   // restaurant menu items are not stock-counted
 
   const save = async () => {
     const body = {
       business, name: f.name, category: f.category, kind: f.kind, unit: f.unit, sku: f.sku, salePrice: toCents(f.salePrice),
-      trackStock: f.kind === 'menu' ? Boolean(f.trackStock) : true, reorderLevel: Number(f.reorderLevel) || 0, active: Boolean(f.active),
+      trackStock: f.kind !== 'menu', reorderLevel: Number(f.reorderLevel) || 0, active: Boolean(f.active),
       openingQty: Number(f.openingQty) || 0, openingCost: toCents(f.openingCost), priceReason: f.priceReason,
     };
     const r = await run(async (key) => {
@@ -207,10 +220,6 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
           </Field>
         )}
         {priceChanged && <Field label="Why is the price changing? (saved in price history)"><input className="form-input" value={f.priceReason} onChange={(e) => set('priceReason', e.target.value)} /></Field>}
-        {f.kind === 'menu' && isNew && (
-          <label className="row"><input type="checkbox" checked={Boolean(f.trackStock)} onChange={(e) => set('trackStock', e.target.checked ? 1 : 0)} />
-            Count stock for this item (e.g. bottled drinks). Leave off for cooked food and give it a recipe instead.</label>
-        )}
         {tracked && f.kind !== 'fuel' && <Field label="Warn me when stock falls to"><input className="form-input" inputMode="decimal" value={f.reorderLevel} onChange={(e) => set('reorderLevel', e.target.value)} /></Field>}
         {isNew && tracked && f.kind !== 'fuel' && (
           <div className="form-row">
@@ -270,56 +279,6 @@ function AdjustModal({ product, onClose, onDone }: { product: any; onClose: () =
         {qty !== '' && <div className={change < 0 ? 'mc-warn' : 'mc-note'}>Stock change {change > 0 ? '+' : ''}{num(change)} {product.unit} · value {money(Math.round(change * product.avg_cost))}
           {type === 'usage' ? ' (counted as cost of food sold)' : ' (counted as a loss)'}</div>}
         <Field label={type === 'usage' ? 'Note (optional)' : 'Reason (required)'}><input className="form-input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-      </div>
-    </Modal>
-  );
-}
-
-/** What one portion of a dish uses. Selling the dish takes these from stock automatically. */
-function RecipeModal({ dish, onClose, onDone }: { dish: any; onClose: () => void; onDone: () => void }) {
-  const { can } = useAuth();
-  const data = useLoad(() => get(`/restaurant/recipes/${dish.id}`), [dish.id]);
-  const ingredients = useLoad(() => get('/products', { business: 'restaurant' }).then((l: any[]) => l.filter((p) => p.kind === 'ingredient' && p.active)), []);
-  const [rows, setRows] = useState<{ ingredient: string; qty: string }[] | null>(null);
-  const { run, busy } = useSubmit();
-  const lines = rows ?? (data.data?.items ?? []).map((i: any) => ({ ingredient: i.ingredient_id, qty: String(i.qty) }));
-  const set = (i: number, patch: Partial<{ ingredient: string; qty: string }>) => setRows(lines.map((r: any, j: number) => (j === i ? { ...r, ...patch } : r)));
-  const cost = lines.reduce((s: number, r: any) => s + (Number(r.qty) || 0) * (ingredients.data?.find((x: any) => x.id === r.ingredient)?.avg_cost ?? 0), 0);
-  const editable = can('catalog');
-  const save = async () => {
-    const r = await run(() => post(`/restaurant/recipes/${dish.id}`, { items: lines.filter((l: any) => l.ingredient).map((l: any) => ({ ingredient: l.ingredient, qty: Number(l.qty) })) }), 'Recipe saved');
-    if (r) onDone();
-  };
-  return (
-    <Modal open onClose={onClose} title={`Recipe — ${dish.name}`} width="md"
-      footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
-        {editable && <button type="button" className="btn btn-primary" disabled={busy || lines.some((l: any) => l.ingredient && !(Number(l.qty) > 0))} onClick={save}>Save recipe</button>}</>}>
-      <div className="form-stack">
-        <p className="muted small">For ONE {dish.unit || 'portion'}. Every sale of {dish.name} takes these amounts from kitchen stock and counts their cost.</p>
-        <div className="table-wrap lines-table">
-          <table>
-            <thead><tr><th>Ingredient</th><th>Amount</th><th className="num">Cost</th><th></th></tr></thead>
-            <tbody>
-              {lines.map((r: any, i: number) => {
-                const ing = ingredients.data?.find((x: any) => x.id === r.ingredient);
-                return (
-                  <tr key={i}>
-                    <td><select className="form-select" value={r.ingredient} disabled={!editable} onChange={(e) => set(i, { ingredient: e.target.value })}>
-                      <option value="">Choose…</option>
-                      {(ingredients.data ?? []).map((x: any) => <option key={x.id} value={x.id}>{x.name} ({x.unit})</option>)}
-                    </select></td>
-                    <td><input className="form-input" style={{ width: 110 }} inputMode="decimal" disabled={!editable} value={r.qty} onChange={(e) => set(i, { qty: e.target.value })} placeholder={ing?.unit ?? ''} /></td>
-                    <td className="num">{ing ? money(Math.round((Number(r.qty) || 0) * ing.avg_cost)) : '—'}</td>
-                    <td>{editable && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setRows(lines.filter((_: any, j: number) => j !== i))}>✕</button>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {editable && <div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setRows([...lines, { ingredient: '', qty: '' }])}><Plus size={14} /> Add ingredient</button></div>}
-        <div className="mc-note">Cost per portion {money(Math.round(cost))} · selling price {money(dish.sale_price)}{dish.sale_price ? ` · margin ${Math.round(((dish.sale_price - cost) / dish.sale_price) * 100)}%` : ''}</div>
-        {!ingredients.loading && !ingredients.data?.length && <div className="mc-warn">Add ingredients first in Ingredients &amp; Stock.</div>}
       </div>
     </Modal>
   );

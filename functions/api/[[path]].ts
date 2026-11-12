@@ -79,9 +79,6 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['PATCH', '/restaurant/orders/:id', rest.updateOrder, ''],
   ['POST', '/restaurant/orders/:id/pay', rest.payOrder, ''],
   ['POST', '/restaurant/orders/:id/cancel', rest.cancelOrder, ''],
-  ['POST', '/restaurant/orders/:id/status', rest.setOrderStatus, ''],
-  ['GET', '/restaurant/recipes/:id', rest.getRecipe, ''],
-  ['POST', '/restaurant/recipes/:id', rest.saveRecipe, ''],
 
   ['GET', '/dashboard', rep.dashboard, 'reports'],
   ['GET', '/reports/summary', rep.summary, 'reports'],

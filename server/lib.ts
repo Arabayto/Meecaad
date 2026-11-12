@@ -33,21 +33,33 @@ export const bad = (message: string) => new HttpError(400, message);
 
 // ── Roles ───────────────────────────────────────────────────────
 export const BUSINESSES = ['restaurant', 'fuel', 'store'];
-const ALL: Perm[] = ['sell', 'stock', 'fuel', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'];
 
-/** What each role may do, per kind of business. The fuel station has no till; its sales are pump readings. */
+/**
+ * What each business does at all — this limits everyone, the owner included.
+ * The restaurant is kept simple: orders, menu, sales, expenses, customers and
+ * reports (no stock, purchases, suppliers or daily closing). Its money can
+ * still be moved by the owner from the owner admin ('money').
+ * The fuel station has no till; its sales are pump readings.
+ */
+export const BUSINESS_FEATURES: Record<string, Perm[]> = {
+  restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
+  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
+  fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
+};
+
+/** What each role may do, per business. */
 export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
-    restaurant: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
   },
-  cashier: { restaurant: ['sell', 'close'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
-  staff: { restaurant: ['sell', 'stock'], store: ['sell', 'stock'], fuel: ['fuel'] },
+  cashier: { restaurant: ['sell'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
+  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
 };
 
 export function permsIn(user: User, business: string): Perm[] {
-  if (user.owner) return ALL;
+  if (user.owner) return BUSINESS_FEATURES[business] ?? [];
   const r = user.roles[business];
   return r && r !== 'owner' ? BIZ_ROLE_PERMS[r][business] ?? [] : [];
 }

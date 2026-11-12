@@ -60,7 +60,7 @@ How the common mistakes are avoided:
 
 ## Business modules
 
-- **Restaurant & Cafe** — menu with categories and prices; **recipes** (selling a dish takes its ingredients from stock at their cost; the menu shows cost and margin per dish); **tables and open orders** (save an order, add to it, pay later); quick sales; split payments (Cash/Zaad/Edahab/any method); credit to a customer; discounts; printable receipts; sales history with returns/cancellations; ingredients with purchases, extra kitchen usage and waste; bottled drinks can be stock-counted.
+- **Restaurant & Cafe** (kept simple) — picture menu with prices; the waiter taps items and sends the order (**Pending**); the cashier takes payment later (Cash/Zaad/Edahab, split, or credit to a customer) and prints the receipt; order numbers restart each day; optional table; sales history with returns/cancellations; expenses (paid when recorded); customer debts; dashboard and reports. No stock, kitchen screen, purchases, suppliers, money page or daily closing — profit is sales − expenses. The owner can move restaurant money from the Owner Admin.
 - **Fuel Station** — fuel types and price per litre (every change kept in price history); tanks with book stock; pumps with meters; deliveries into a tank (purchases, paid or on supplier credit); **shift readings**: opening → closing meter = litres sold → money expected, then cash/mobile received and credit customers, with any shortage/overage requiring a reason; a meter that does not continue from the last reading is flagged; **tank dips** compare measured litres to the book and record the variance; **reconciliation**: start + delivered − sold ± dips = should-be-now, vs the last dip, plus daily expected/received/difference.
 - **Store** — products, categories, barcodes, purchase/selling prices, suppliers, purchases, sales, returns, waste, stock counts, customer debts, supplier payments, best sellers, low-stock alerts.
 
@@ -76,7 +76,7 @@ Three independent business portals plus an owner area. Each has its own sign-in 
 
 | Address | For |
 |---|---|
-| `/restaurant` | Restaurant & Cafe: orders & tables, menu with recipes, ingredients |
+| `/restaurant` | Restaurant & Cafe: new order, orders to pay, menu, sales, expenses, customers, reports |
 | `/store` | Store: point of sale, products & stock, purchases |
 | `/fuel` | Fuel Station: pumps & shifts, tanks, deliveries, fuel prices |
 | `/admin` | Owner only: all businesses together, users & roles, settings, audit log |
@@ -87,8 +87,8 @@ A person has one account and a **role in each business** they work in:
 | Role | Restaurant / Store | Fuel Station |
 |---|---|---|
 | Manager | Everything for that business except users | Same, with pump shifts instead of a till |
-| Cashier | Sell, collect debts, close the day | Record pump shifts, collect debts, close the day |
-| Staff | Sell, record stock usage/waste | Pump readings and tank dips |
+| Cashier | Sell, collect debts, close the day (restaurant: take orders and payments) | Record pump shifts, collect debts, close the day |
+| Staff | Sell, record stock usage/waste (restaurant: take orders and payments) | Pump readings and tank dips |
 | Owner | Everything, every business, the owner admin | |
 
 Customers and suppliers belong to the business(es) they are linked to. The server enforces every business boundary and permission; the screens only hide what cannot be used. Audit findings, changes and the data migration are in [docs/BUSINESS_SEPARATION.md](docs/BUSINESS_SEPARATION.md).

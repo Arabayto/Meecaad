@@ -8,15 +8,20 @@ export interface User { id: string; username: string; full_name: string; role: s
 export interface Business { id: string; name: string; kind: 'restaurant' | 'fuel' | 'store' }
 export interface Method { id: string; name: string; active: number }
 
-// Mirrors server/lib.ts BIZ_ROLE_PERMS (the server enforces; this only hides what cannot be used).
+// Mirrors server/lib.ts BUSINESS_FEATURES and BIZ_ROLE_PERMS (the server enforces; this only hides what cannot be used).
+const BUSINESS_FEATURES: Record<string, Perm[]> = {
+  restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
+  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
+  fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
+};
 const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
-    restaurant: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
   },
-  cashier: { restaurant: ['sell', 'close'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
-  staff: { restaurant: ['sell', 'stock'], store: ['sell', 'stock'], fuel: ['fuel'] },
+  cashier: { restaurant: ['sell'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
+  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
 };
 export const ROLE_LABELS: Record<string, string> = { owner: 'Owner', manager: 'Manager', cashier: 'Cashier', staff: 'Staff' };
 export const PORTALS: Record<PortalId, { name: string; short: string }> = {
@@ -80,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const canIn = useCallback((perm: Perm, business: string) => {
     if (!user) return false;
-    if (user.owner) return true;
+    if (user.owner) return Boolean(BUSINESS_FEATURES[business]?.includes(perm));
     const r = user.roles[business];
     return Boolean(r && r !== 'owner' && BIZ_ROLE_PERMS[r][business]?.includes(perm));
   }, [user]);

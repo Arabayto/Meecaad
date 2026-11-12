@@ -2,7 +2,7 @@
 // Every figure is calculated from saved journal lines and stock records.
 
 import {
-  HttpError, Tx, addDays, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, placeholders, requireBiz, str, today,
+  BUSINESS_FEATURES, HttpError, Tx, addDays, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, placeholders, requireBiz, str, today,
   type Ctx,
 } from './lib';
 
@@ -154,7 +154,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
       detail: `${r.entry_date}: ${r.explanation}`, link: '/closing' });
   }
   const yesterday = addDays(t, -1);
-  for (const b of scope) {
+  for (const b of scope.filter((x) => BUSINESS_FEATURES[x]?.includes('close'))) {
     const closed = await first<any>(db, `SELECT MAX(entry_date) AS d FROM daily_closings WHERE business_id = ? AND status = 'closed'`, b);
     const activity = await first<any>(db, `SELECT entry_date AS d FROM daily_totals WHERE business_id = ? AND entry_date > ? AND entry_date <= ?
                                            AND entry_type NOT IN ('closing_diff', 'closing_reopen') ORDER BY entry_date LIMIT 1`,

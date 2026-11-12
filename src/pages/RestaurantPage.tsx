@@ -1,9 +1,9 @@
 // Restaurant & Cafe POS: the waiter taps pictures to build an order and sends it
-// (Pending). The kitchen marks it Ready. When the customer pays, the cashier
-// takes the payment and the order becomes a sale.
+// (Pending). When the customer pays, the cashier takes the payment and the
+// order becomes a sale.
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChefHat, ClipboardList, Minus, Plus, Printer, Send, Trash2 } from 'lucide-react';
+import { ClipboardList, Minus, Plus, Printer, Send, Trash2 } from 'lucide-react';
 import { fromCents, get, money, num, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
@@ -35,9 +35,6 @@ function usePolling(reload: () => void, ms: number) {
   }, [reload, ms]);
 }
 
-const STATUS: Record<string, { label: string; tone: 'yellow' | 'blue' | 'green' }> = {
-  pending: { label: 'Pending', tone: 'yellow' }, ready: { label: 'Ready', tone: 'blue' }, served: { label: 'Served', tone: 'green' },
-};
 const since = (iso: string) => {
   const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)} h ${m % 60} min ago`;
@@ -203,36 +200,25 @@ export function OrdersPage() {
   const navigate = useNavigate();
   const orders = useLoad(() => get('/restaurant/orders'), []);
   usePolling(orders.reload, 10000);
-  const [filter, setFilter] = useState('all');
   const [paying, setPaying] = useState<any>(null);
   const [cancelling, setCancelling] = useState<any>(null);
   const [ticket, setTicket] = useState<any>(null);
   const [receipt, setReceipt] = useState<any>(null);
-  const { run } = useSubmit();
-  const list = (orders.data ?? []).filter((o: any) => filter === 'all' || o.kitchen_status === filter);
-  const counts = (s: string) => (orders.data ?? []).filter((o: any) => o.kitchen_status === s).length;
-  const setStatus = async (o: any, status: string) => {
-    if (await run(() => post(`/restaurant/orders/${o.id}/status`, { status }))) orders.reload();
-  };
+  const list = orders.data ?? [];
   const unpaid = (orders.data ?? []).reduce((s: number, o: any) => s + o.total, 0);
 
   return (
     <div className="module-page">
       <PageHeader icon={<ClipboardList size={22} />} title="Orders" subtitle={`${orders.data?.length ?? 0} open orders · ${money(unpaid)} not paid yet`}
         actions={<button type="button" className="btn btn-primary" onClick={() => navigate(path('/orders'))}><Plus size={16} /> New order</button>} />
-      <div className="scope-tabs">
-        {[['all', `All (${orders.data?.length ?? 0})`], ['pending', `Pending (${counts('pending')})`], ['ready', `Ready (${counts('ready')})`], ['served', `Served (${counts('served')})`]].map(([k, l]) => (
-          <button key={k} type="button" className={filter === k ? 'active' : ''} onClick={() => setFilter(k)}>{l}</button>
-        ))}
-      </div>
       <ErrorBox error={orders.error} />
-      {!orders.loading && !list.length && <div className="mc-note">No {filter === 'all' ? 'open' : STATUS[filter].label.toLowerCase()} orders. New orders appear here automatically.</div>}
+      {!orders.loading && !list.length && <div className="mc-note">No pending orders. New orders appear here automatically.</div>}
       <div className="orders-grid">
         {list.map((o: any) => (
-          <div key={o.id} className={`order-card order-card--${o.kitchen_status}`}>
+          <div key={o.id} className="order-card">
             <div className="row row--between">
               <strong className="order-card__title">{orderTitle(o)}</strong>
-              <StatusBadge label={STATUS[o.kitchen_status].label} tone={STATUS[o.kitchen_status].tone} />
+              <StatusBadge label="Pending" tone="yellow" />
             </div>
             <div className="small muted">{since(o.created_at)} · by {o.created_by_name}</div>
             <ul className="order-card__items">
@@ -242,8 +228,6 @@ export function OrdersPage() {
             <div className="cart-total" style={{ fontSize: 18 }}><span>Total</span><span>{money(o.total)}</span></div>
             <button type="button" className="btn btn-primary btn-block" onClick={() => setPaying(o)}>Pay {money(o.total)}</button>
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              {o.kitchen_status === 'pending' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setStatus(o, 'ready')}>Mark ready</button>}
-              {o.kitchen_status === 'ready' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setStatus(o, 'served')}>Mark served</button>}
               <button type="button" className="btn btn-ghost btn-xs" onClick={() => navigate(`${path('/orders')}?order=${o.id}`)}>Add items</button>
               <button type="button" className="btn btn-ghost btn-xs" onClick={() => setTicket({ ...o, table: o.table_name })}><Printer size={12} /> Ticket</button>
               <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCancelling(o)}>Cancel</button>
@@ -317,41 +301,5 @@ function PayModal({ order, onClose, onPaid }: { order: any; onClose: () => void;
         )}
       </div>
     </Modal>
-  );
-}
-
-// ── Kitchen screen ──────────────────────────────────────────────
-export function KitchenPage() {
-  const orders = useLoad(() => get('/restaurant/orders'), []);
-  usePolling(orders.reload, 8000);
-  const { run } = useSubmit();
-  const list = (orders.data ?? []).filter((o: any) => o.kitchen_status !== 'served');
-  const setStatus = async (o: any, status: string) => {
-    if (await run(() => post(`/restaurant/orders/${o.id}/status`, { status }))) orders.reload();
-  };
-  return (
-    <div className="module-page">
-      <PageHeader icon={<ChefHat size={22} />} title="Kitchen" subtitle="Orders to cook, oldest first. Updates by itself." />
-      <ErrorBox error={orders.error} />
-      {!orders.loading && !list.length && <div className="mc-note">Nothing to cook right now.</div>}
-      <div className="orders-grid">
-        {list.map((o: any) => (
-          <div key={o.id} className={`order-card kitchen-card order-card--${o.kitchen_status}`}>
-            <div className="row row--between">
-              <strong className="order-card__title" style={{ fontSize: 24 }}>{orderTitle(o)}</strong>
-              <StatusBadge label={STATUS[o.kitchen_status].label} tone={STATUS[o.kitchen_status].tone} />
-            </div>
-            <div className="small muted">sent {since(o.created_at)}</div>
-            <ul className="kitchen-card__items">
-              {o.items.map((i: any) => <li key={i.id}><strong>{num(i.qty)} ×</strong> {i.name}</li>)}
-            </ul>
-            {o.note && <div className="mc-warn"><strong>Note:</strong> {o.note}</div>}
-            {o.kitchen_status === 'pending'
-              ? <button type="button" className="btn btn-primary btn-block" onClick={() => setStatus(o, 'ready')}>Ready ✓</button>
-              : <button type="button" className="btn btn-secondary btn-block" onClick={() => setStatus(o, 'served')}>Served</button>}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }

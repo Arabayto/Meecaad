@@ -1,8 +1,8 @@
-// Restaurant & Cafe only: tables, open orders (take now, pay later) and recipes.
+// Restaurant & Cafe only: tables and open orders (send now, pay later).
 // Every endpoint here is fixed to the restaurant business.
 
 import { prepareSale } from './ops';
-import { HttpError, Tx, all, bad, bool, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, round3, str, today, type Ctx } from './lib';
+import { HttpError, Tx, all, bad, bool, first, idemKey, newId, nowIso, placeholders, qty, requireBiz, str, today, type Ctx } from './lib';
 
 const R = 'restaurant';
 
@@ -117,19 +117,6 @@ export async function updateOrder(ctx: Ctx) {
   return tx.commit(null, { id: o.id });
 }
 
-/** Kitchen progress of an open order: pending (sent) → ready (cooked) → served. */
-export async function setOrderStatus(ctx: Ctx) {
-  requireBiz(ctx, R, 'sell');
-  const o = await openOrder(ctx, ctx.params.id);
-  const status = String(ctx.body.status);
-  if (!['pending', 'ready', 'served'].includes(status)) throw bad('Unknown status');
-  const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`UPDATE open_orders SET kitchen_status = ?, ready_at = CASE WHEN ? = 'ready' THEN ? ELSE ready_at END, updated_at = ? WHERE id = ? AND status = 'open'`,
-    status, status, nowIso(), nowIso(), o.id);
-  tx.audit(status, 'order', o.id, R, { number: o.number });
-  return tx.commit(null, { id: o.id, status });
-}
-
 export async function cancelOrder(ctx: Ctx) {
   requireBiz(ctx, R, 'sell');
   const o = await openOrder(ctx, ctx.params.id);
@@ -157,37 +144,4 @@ export async function payOrder(ctx: Ctx) {
     if (String(e?.message).includes('already exists')) throw new HttpError(409, 'This order is already paid');
     throw e;
   }
-}
-
-// ── Recipes ─────────────────────────────────────────────────────
-export async function getRecipe(ctx: Ctx) {
-  requireBiz(ctx, R, 'stock');
-  const m = await first<any>(ctx.db, `SELECT * FROM products WHERE id = ? AND business_id = 'restaurant' AND kind = 'menu'`, ctx.params.id);
-  if (!m) throw new HttpError(404, 'Menu item not found');
-  const items = await all<any>(ctx.db, `SELECT r.ingredient_id, r.qty, i.name, i.unit, i.avg_cost FROM recipe_items r JOIN products i ON i.id = r.ingredient_id
-                                         WHERE r.menu_id = ? ORDER BY i.name`, m.id);
-  return { menu: m, items, cost: Math.round(items.reduce((s, i) => s + i.qty * i.avg_cost, 0)) };
-}
-
-export async function saveRecipe(ctx: Ctx) {
-  requireBiz(ctx, R, 'catalog');
-  const m = await first<any>(ctx.db, `SELECT * FROM products WHERE id = ? AND business_id = 'restaurant' AND kind = 'menu'`, ctx.params.id);
-  if (!m) throw new HttpError(404, 'Menu item not found');
-  if (m.track_stock) throw bad('This item is counted as stock itself (e.g. bottled drinks), so it has no recipe');
-  const list = Array.isArray(ctx.body.items) ? ctx.body.items : [];
-  const ingredients = list.length ? await all<any>(ctx.db, `SELECT id, name FROM products WHERE business_id = 'restaurant' AND kind = 'ingredient' AND id IN (${placeholders(list)})`,
-    ...list.map((i: any) => String(i.ingredient))) : [];
-  const seen = new Set<string>();
-  const rows = list.map((i: any) => {
-    const ing = ingredients.find((x) => x.id === String(i.ingredient));
-    if (!ing) throw bad('Only restaurant ingredients can be used in a recipe');
-    if (seen.has(ing.id)) throw bad(`${ing.name} is listed twice`);
-    seen.add(ing.id);
-    return { id: ing.id, qty: round3(qty(i.qty, `Amount of ${ing.name}`, { positive: true })) };
-  });
-  const tx = new Tx(ctx.db, ctx.user);
-  tx.run('DELETE FROM recipe_items WHERE menu_id = ?', m.id);
-  for (const r of rows) tx.run('INSERT INTO recipe_items (menu_id, ingredient_id, qty) VALUES (?,?,?)', m.id, r.id, r.qty);
-  tx.audit('recipe', 'product', m.id, R, { items: rows });
-  return tx.commit(null, { id: m.id });
 }

@@ -86,7 +86,7 @@
 .pay-sum { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .btn-block { width: 100%; min-height: 48px; font-size: 16px; }
 
-/* Restaurant POS: picture tiles, order cards, kitchen screen */
+/* Restaurant POS: picture tiles and order cards */
 .menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
 .menu-tile { position: relative; border: 2px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); overflow: hidden; transition: border-color var(--transition); }
 .menu-tile--on { border-color: var(--primary); background: var(--primary-lighter); }
@@ -100,12 +100,9 @@
 .item-pic--emoji { background: #fff7e6; line-height: 1; }
 .orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; align-items: start; }
 .order-card { border: 1px solid var(--border); border-left: 5px solid #eab308; border-radius: var(--radius-lg); background: var(--bg-card); padding: 14px; display: grid; gap: 8px; box-shadow: var(--shadow-sm); }
-.order-card--ready { border-left-color: #2563eb; }
-.order-card--served { border-left-color: #16a34a; }
 .order-card__title { font-size: 18px; }
 .order-card__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
 .order-card__items li { display: flex; justify-content: space-between; gap: 8px; }
-.kitchen-card__items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 20px; }
 .kitchen-ticket .ticket-line { font-size: 16px; margin: 4px 0; }
 
 /* Sticky order bar on phones and tablets (the order panel is below the menu there) */

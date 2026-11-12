@@ -5,7 +5,8 @@ import {
   assertDayOpen, today, BUSINESSES, type Ctx, type Perm,
 } from './lib';
 
-const KINDS: Record<string, string[]> = { restaurant: ['menu', 'ingredient'], store: ['item'], fuel: ['fuel'] };
+// The restaurant sells menu items only (no ingredient stock).
+const KINDS: Record<string, string[]> = { restaurant: ['menu'], store: ['item'], fuel: ['fuel'] };
 
 // ── Products ────────────────────────────────────────────────────
 export async function listProducts(ctx: Ctx) {
@@ -17,8 +18,7 @@ export async function listProducts(ctx: Ctx) {
     `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty FROM sales s JOIN sale_items si ON si.sale_id = s.id
                   WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date >= ? AND s.status = 'completed' GROUP BY si.product_id) ` : ''}
      SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d' : ''},
-       img.updated_at AS image_v,
-       CASE WHEN p.kind = 'menu' THEN (SELECT ROUND(SUM(r.qty * i.avg_cost)) FROM recipe_items r JOIN products i ON i.id = r.ingredient_id WHERE r.menu_id = p.id) END AS recipe_cost
+       img.updated_at AS image_v
      FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''} LEFT JOIN product_images img ON img.product_id = p.id
      WHERE p.business_id IN (${placeholders(scope)})
      ORDER BY p.active DESC, p.kind, p.category, p.name`, ...(stats ? [...scope, today(-30)] : []), ...scope);
@@ -30,7 +30,7 @@ export async function createProduct(ctx: Ctx) {
   const kind = String(b.kind ?? KINDS[business][0]);
   if (!KINDS[business].includes(kind)) throw bad('This product type does not belong to this business');
   const id = newId();
-  const track = kind === 'fuel' || kind === 'ingredient' || kind === 'item' ? 1 : bool(b.trackStock) ? 1 : 0;
+  const track = kind === 'menu' ? 0 : 1;   // restaurant menu items are not stock-counted
   const openingQty = kind === 'fuel' || !track ? 0 : qty(b.openingQty ?? 0, 'Opening quantity', { min: 0 });
   const openingCost = openingQty ? Number(cents(b.openingCost, 'Opening unit cost')) : 0;
   const name = str(b.name, 'Name', { required: true, max: 120 });
@@ -116,6 +116,7 @@ export async function adjustStock(ctx: Ctx) {
   if (!p || !p.track_stock || p.kind === 'fuel') throw bad('Choose a stocked product (fuel is corrected with tank dips)');
   const type = String(b.type);
   if (!['usage', 'waste', 'adjustment'].includes(type)) throw bad('Choose usage, waste or count');
+  if (p.business_id === 'restaurant') throw bad('The restaurant does not keep stock');
   const business = requireBiz(ctx, p.business_id, type === 'adjustment' ? 'catalog' : 'stock');
   const date = entryDate(b.date);
   await assertDayOpen(ctx.db, business, date);
@@ -157,14 +158,15 @@ function party(kind: 'customer' | 'supplier') {
   const col = `${kind}_id`;
   const sign = kind === 'customer' ? 1 : -1;
   // Fuel attendants add the customers they give fuel on credit to.
-  const perms: Perm[] = kind === 'customer' ? ['sell', 'fuel', 'reports'] : ['purchase', 'expense', 'reports'];
+  // Suppliers exist only where stock is bought (store and fuel station), not in the restaurant.
+  const perms: Perm[] = kind === 'customer' ? ['sell', 'fuel', 'reports'] : ['purchase'];
   const mayManage = (ctx: Ctx, business: string) => perms.some((p) => can(ctx.user, p, business));
   const linkedTo = async (ctx: Ctx, id: string) =>
     (await all<{ business_id: string }>(ctx.db, `SELECT business_id FROM ${links} WHERE ${col} = ?`, id)).map((r) => r.business_id);
 
   return {
     async list(ctx: Ctx) {
-      const scope = bizScope(ctx, ctx.url.searchParams.get('business'));
+      const scope = bizScope(ctx, ctx.url.searchParams.get('business'), kind === 'supplier' ? 'purchase' : undefined);
       // Balances come from the running totals (account_balances), not the full history.
       // A charge raises a customer's balance but lowers a supplier's (amounts are + debit / − credit).
       const [charge, payment] = kind === 'customer' ? ['last_increase', 'last_decrease'] : ['last_decrease', 'last_increase'];

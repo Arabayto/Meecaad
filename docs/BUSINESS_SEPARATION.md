@@ -23,12 +23,13 @@ Meecaad runs three independent businesses: **Restaurant & Cafe**, **Store** and 
 - Every customer/supplier list, edit, statement, sale, purchase, expense, payment and fuel credit is checked against the business **on the server** (`partyIn`, `requireBiz`, `bizScope` in `server/lib.ts`).
 - **Roles per business:** `user_businesses.role` is `manager`, `cashier` or `staff`. Permissions depend on the role *and* the kind of business (`BIZ_ROLE_PERMS`); for example, at the fuel station a cashier records pump shifts instead of using a till. The owner flag gives everything.
 - Dashboards and reports require report permission in **each** business they include. A "combined" view only covers the businesses where the person has it.
-- Restaurant-only tables (`restaurant_tables`, `open_orders`, `open_order_items`, `order_sales`, `recipe_items`, `sale_item_components`) are fixed to the restaurant with `CHECK (business_id = 'restaurant')`.
+- Restaurant-only tables (`restaurant_tables`, `open_orders`, `open_order_items`, `order_sales`) are fixed to the restaurant with `CHECK (business_id = 'restaurant')`.
+- **Features per business** (`BUSINESS_FEATURES`, limits the owner too): the restaurant has no stock, purchases, suppliers or daily closing (`migrations/0006_simple_restaurant.sql` removed recipes and kitchen statuses; past financial records are kept).
 
 ### Portals
 | Address | Who | Navigation |
 |---|---|---|
-| `/restaurant` (`/restaurant/login`) | Restaurant roles, owner | Dashboard, Orders & Tables, Sales History, Menu, Ingredients & Stock, Purchases, Expenses, Customers & Debts, Suppliers, Money, Daily Closing, Reports |
+| `/restaurant` (`/restaurant/login`) | Restaurant roles, owner | Dashboard, New Order, Orders, Sales History, Menu, Expenses, Customers & Debts, Reports |
 | `/store` (`/store/login`) | Store roles, owner | Dashboard, Point of Sale, Sales & Returns, Products & Stock, Purchases, Expenses, Customers & Debts, Suppliers, Money, Daily Closing, Reports |
 | `/fuel` (`/fuel/login`) | Fuel roles, owner | Dashboard, Pumps & Shifts, Fuel Types & Prices, Deliveries, Expenses, Credit Customers, Suppliers, Money, Daily Closing, Reports |
 | `/admin` (`/admin/login`) | Owner only | All Businesses, Combined Reports, Money & Transfers, Customers, Suppliers, Users & Roles, Settings, Audit Log |

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  BarChart3, BookOpen, ChefHat, ClipboardCheck, ClipboardList, Soup, Coffee, FileClock, Fuel, Gauge, Home, LayoutGrid, LogOut, Menu, PackageSearch, Receipt,
+  BarChart3, BookOpen, ClipboardCheck, ClipboardList, Coffee, FileClock, Fuel, Gauge, Home, LayoutGrid, LogOut, Menu, PackageSearch, Receipt,
   Settings, ShoppingBag, ShoppingCart, Store, Truck, UserCheck, Users, Wallet, X,
 } from 'lucide-react';
 import { useAuth, PORTALS, ROLE_LABELS, type Perm, type PortalId } from '../contexts/AuthContext';
@@ -12,20 +12,15 @@ export interface NavItem { label: string; path: string; icon: typeof Home; perms
 
 /** Each portal has its own navigation. Items show when the user holds any of `perms` in that business. */
 export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
+  // A simple restaurant: take orders, get paid, keep the menu, expenses and debts.
   restaurant: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'New Order', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
     { label: 'Orders', path: '/order-list', icon: ClipboardList, perms: ['sell'] },
-    { label: 'Kitchen', path: '/kitchen', icon: ChefHat, perms: ['sell'] },
     { label: 'Sales History', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
-    { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog', 'stock'] },
-    { label: 'Ingredients & Stock', path: '/stock', icon: Soup, perms: ['stock', 'catalog'] },
-    { label: 'Purchases', path: '/purchases', icon: Truck, perms: ['purchase'] },
+    { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },
-    { label: 'Suppliers', path: '/suppliers', icon: Users, perms: ['purchase'] },
-    { label: 'Money', path: '/money', icon: Wallet, perms: ['money'] },
-    { label: 'Daily Closing', path: '/closing', icon: ClipboardCheck, perms: ['close'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
   ],
   store: [

@@ -120,7 +120,7 @@ export function DashboardPage() {
                   {cash.map((c: any) => <Fragment key={c.method_id}><span>{c.method_name}</span><span><Money c={c.balance} /></span></Fragment>)}
                   <span>Customers owe</span><span>{money(d.receivable.find((r: any) => r.business_id === b.id)?.total)}</span>
                   <span>Owed to suppliers</span><span>{money(d.payable.find((r: any) => r.business_id === b.id)?.total)}</span>
-                  <span>Last daily closing</span><span>{last ?? 'Never'}</span>
+                  {b.kind !== 'restaurant' && <><span>Last daily closing</span><span>{last ?? 'Never'}</span></>}
                 </div>
               </div>
             );
@@ -157,7 +157,7 @@ export function DashboardPage() {
 
           <div className="panel__header" style={{ marginTop: 20 }}>
             <div><p>Where the money is</p><h2>Cash and mobile money balances</h2></div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/money'))}>Open accounts</button>
+            {business !== 'restaurant' && <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/money'))}>Open accounts</button>}
           </div>
           <div className="table-wrap">
             <table>

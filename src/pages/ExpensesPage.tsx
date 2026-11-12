@@ -12,7 +12,9 @@ export function ExpensesPage() {
   const [from, setFrom] = useState(today.slice(0, 8) + '01');
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/expenses', { business, from, to }), [business, from, to]);
-  const suppliers = useLoad(() => get('/suppliers', { business }), [business]);
+  // The restaurant records expenses when they are paid (it has no suppliers).
+  const owedAllowed = business !== 'restaurant';
+  const suppliers = useLoad(() => (owedAllowed ? get('/suppliers', { business }) : Promise.resolve([])), [business]);
   const [f, setF] = useState({ category: '', description: '', amount: '', method: 'cash', supplier: '', date: today });
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
   const [voiding, setVoiding] = useState<any>(null);
@@ -50,7 +52,7 @@ export function ExpensesPage() {
               <Field label="Paid with">
                 <select className="form-select" value={f.method} onChange={(e) => set('method', e.target.value)}>
                   {activeMethods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  <option value="unpaid">Not paid yet (owed)</option>
+                  {owedAllowed && <option value="unpaid">Not paid yet (owed)</option>}
                 </select>
               </Field>
               <Field label="Date"><input type="date" className="form-input" value={f.date} max={today} onChange={(e) => set('date', e.target.value)} /></Field>

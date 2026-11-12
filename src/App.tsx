@@ -5,7 +5,7 @@ import { LoginPage } from './pages/LoginPage';
 import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
-import { KitchenPage, NewOrderPage, OrdersPage } from './pages/RestaurantPage';
+import { NewOrderPage, OrdersPage } from './pages/RestaurantPage';
 import { SalesPage } from './pages/SalesPage';
 import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
@@ -81,17 +81,23 @@ function PortalPage() {
     users: [['users'], <UsersPage />],
     settings: [['users'], <SettingsPage />],
     audit: [['users'], <AuditPage />],
+  } : p === 'restaurant' ? {
+    // A simple restaurant: orders, sales, menu, expenses, customers, reports.
+    orders: [['sell'], <NewOrderPage />],
+    'order-list': [['sell'], <OrdersPage />],
+    sales: [['sell', 'reports'], <SalesPage />],
+    menu: [['catalog'], <StockPage view="menu" />],
+    expenses: [['expense'], <ExpensesPage />],
+    customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
+    reports: [['reports'], <ReportsPage />],
   } : {
     ...(p === 'fuel' ? {
       pumps: [['fuel', 'reports'], <FuelPage />],
       fuels: [['catalog'], <StockPage view="fuels" />],
     } : {
-      ...(p === 'restaurant'
-        ? { orders: [['sell'], <NewOrderPage />], 'order-list': [['sell'], <OrdersPage />], kitchen: [['sell'], <KitchenPage />] }
-        : { sell: [['sell'], <SellPage />] }),
+      sell: [['sell'], <SellPage />],
       sales: [['sell', 'reports'], <SalesPage />],
-      stock: [['stock', 'catalog'], <StockPage view={p === 'restaurant' ? 'ingredients' : 'products'} />],
-      ...(p === 'restaurant' ? { menu: [['catalog', 'stock'], <StockPage view="menu" />] } : {}),
+      stock: [['stock', 'catalog'], <StockPage view="products" />],
     }),
     purchases: [['purchase'], <PurchasesPage />],
     expenses: [['expense'], <ExpensesPage />],

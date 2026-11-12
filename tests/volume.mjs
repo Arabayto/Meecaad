@@ -57,10 +57,9 @@ async function main() {
     await call('PATCH', `/customers/${id}`, { businesses: ['store', 'restaurant'] });
     customers.push(id);
   }
-  const store = [], menu = [], ingredients = [];
+  const store = [], menu = [];
   for (let i = 0; i < 40; i++) store.push((await post('/products', { business: 'store', name: `Item ${i}`, kind: 'item', salePrice: 100 + i * 25, openingQty: 400, openingCost: 60 + i * 15, date: start })).id);
   for (let i = 0; i < 25; i++) menu.push((await post('/products', { business: 'restaurant', name: `Dish ${i}`, kind: 'menu', salePrice: 150 + i * 20 })).id);
-  for (let i = 0; i < 8; i++) ingredients.push((await post('/products', { business: 'restaurant', name: `Ingredient ${i}`, kind: 'ingredient', unit: 'kg', openingQty: 5000, openingCost: 80, date: start })).id);
   const fuels = [(await post('/products', { business: 'fuel', name: 'Diesel', kind: 'fuel', salePrice: 110 })).id, (await post('/products', { business: 'fuel', name: 'Petrol', kind: 'fuel', salePrice: 120 })).id];
   const tanks = [];
   for (const [i, f] of fuels.entries()) tanks.push((await post('/fuel/tanks', { product: f, name: `Tank ${i + 1}`, capacity: 40000, openingQty: 30000, openingCost: 90, date: start })).id);
@@ -83,8 +82,7 @@ async function main() {
           : { business: biz, date, items, payments: [{ method: pick(methods), amount: total }] });
       }
     }
-    // Restaurant kitchen usage, an expense per business, debt payments.
-    await post('/stock/adjust', { product: pick(ingredients), type: 'usage', qty: 3, date });
+    // An expense per business, debt payments.
     for (const biz of ['store', 'restaurant', 'fuel']) await post('/expenses', { business: biz, category: pick(['Salaries', 'Electricity', 'Transport', 'Repairs']), amount: 500 + Math.floor(rnd() * 3000), method: 'cash', date });
     for (let k = 0; k < 3; k++) {
       const c = pick(customers);
@@ -105,7 +103,7 @@ async function main() {
       for (const t of setup.tanks) await post('/fuel/dips', { tank: t.id, measuredQty: Math.max(0, Math.round(t.stock_qty - 5)), reason: 'evaporation', date });
     }
     // Close each business's day with the counted money equal to expected.
-    for (const biz of ['store', 'restaurant', 'fuel']) {
+    for (const biz of ['store', 'fuel']   /* the restaurant has no daily closing */) {
       const pre = await get(`/closing/preview?business=${biz}&date=${date}`);
       await post('/closing', { business: biz, date, counted: Object.fromEntries(pre.lines.map((l) => [l.method_id, l.expected])) });
     }
