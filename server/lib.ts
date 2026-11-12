@@ -54,7 +54,7 @@ export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
   },
-  cashier: { restaurant: ['sell'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },
+  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel', 'close'] },   // restaurant cashiers pay small expenses from the drawer
   staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
 };
 
@@ -177,6 +177,13 @@ export async function assertDayOpen(db: D1Database, business: string, date: stri
   const last = await first<{ d: string | null }>(db, `SELECT MAX(entry_date) AS d FROM daily_closings WHERE business_id = ? AND status = 'closed'`, business);
   if (last?.d && date <= last.d) {
     throw new HttpError(409, `The ${business} business is closed up to ${last.d}. Use a later date, or ask the owner/manager to reopen that day.`);
+  }
+  // A month or year the owner has closed (locked) cannot change any more.
+  const lock = await first<{ d: string | null; p: string | null }>(db,
+    `SELECT locked_until AS d, period AS p FROM period_locks WHERE business_id = ? AND status = 'locked' AND ? <= locked_until
+       AND ? >= (CASE kind WHEN 'month' THEN period || '-01' ELSE period || '-01-01' END) LIMIT 1`, business, date, date);
+  if (lock?.d) {
+    throw new HttpError(409, `${lock.p} is closed (locked by the owner). Records dated in it can no longer be added or changed.`);
   }
 }
 

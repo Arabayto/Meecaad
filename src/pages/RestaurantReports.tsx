@@ -11,6 +11,12 @@ import { DateRange, ErrorBox, Money, PageHeader, Stat, fmtTime, useLoad } from '
 import { ItemPicture } from './RestaurantPage';
 
 const R = 'restaurant';
+
+/** Money found short (or over) when shifts were closed also counts in profit. */
+function ShiftDiff({ c }: { c: number }) {
+  if (!c) return null;
+  return <span style={{ display: 'block', color: c > 0 ? '#b91c1c' : undefined }}>includes {money(Math.abs(c))} cash {c > 0 ? 'short' : 'over'} at shift closings</span>;
+}
 const PERIODS = [
   { key: 'today', label: 'Today', vs: 'yesterday', vsLabel: 'yesterday' },
   { key: 'week', label: 'This week', vs: 'lastWeek', vsLabel: 'same days last week' },
@@ -59,7 +65,7 @@ export function RestaurantDashboard() {
       <section className="stat-grid">
         <Stat label={`Sales · ${period.label}`} value={money(now.revenue)} sub={<Trend now={now.revenue} before={before.revenue} label={period.vsLabel} />} />
         <Stat label="Expenses" value={money(now.expenses)} sub={<Trend now={now.expenses} before={before.expenses} label={period.vsLabel} lowerIsBetter />} />
-        <Stat label="Profit (sales − expenses)" value={money(now.profit)} tone={now.profit < 0 ? 'red' : 'green'} sub={<Trend now={now.profit} before={before.profit} label={period.vsLabel} />} />
+        <Stat label="Profit (sales − expenses)" value={money(now.profit)} tone={now.profit < 0 ? 'red' : 'green'} sub={<><Trend now={now.profit} before={before.profit} label={period.vsLabel} /><ShiftDiff c={now.cashDiff} /></>} />
         <Stat label="Paid orders" value={num(count)} sub={count ? `average ${money(Math.round(now.revenue / count))}` : 'none yet'} />
       </section>
 
@@ -144,7 +150,7 @@ export function RestaurantReports() {
           <section className="stat-grid">
             <Stat label="Sales" value={money(p.revenue)} />
             <Stat label="Expenses" value={money(p.expenses)} />
-            <Stat label="Profit (sales − expenses)" value={money(p.profit)} tone={p.profit < 0 ? 'red' : 'green'} />
+            <Stat label="Profit (sales − expenses)" value={money(p.profit)} tone={p.profit < 0 ? 'red' : 'green'} sub={<ShiftDiff c={p.cashDiff} />} />
             <Stat label="Paid orders" value={num(count)} sub={count ? `average ${money(Math.round(p.revenue / count))}` : ''} />
           </section>
 

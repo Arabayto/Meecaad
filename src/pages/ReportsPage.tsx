@@ -14,6 +14,7 @@ export const TYPE_LABEL: Record<string, string> = {
   owner_in: 'Owner added money', owner_in_void: 'Owner money cancelled', owner_out: 'Owner took money', owner_out_void: 'Owner withdrawal cancelled',
   stock_usage: 'Kitchen usage', stock_waste: 'Waste / damage', stock_adjustment: 'Stock count correction', opening_stock: 'Opening stock',
   fuel_shift: 'Fuel shift sales', fuel_shift_void: 'Fuel shift cancelled', tank_dip: 'Tank dip variance', closing_diff: 'Daily closing difference', closing_reopen: 'Day reopened',
+  shift_diff: 'Shift closing difference', shift_reopen: 'Shift reopened',
 };
 const ACCOUNT_LABEL: Record<string, string> = {
   cash: 'Money account', receivable: 'Customer debt', inventory: 'Stock', payable: 'Owed to supplier', sales: 'Sales', cogs: 'Cost of goods',

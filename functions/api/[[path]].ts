@@ -8,6 +8,7 @@ import * as fuel from '../../server/fuel';
 import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
 import * as rest from '../../server/restaurant';
+import * as shifts from '../../server/shifts';
 import { ensureSchema } from '../../server/migrate';
 import { metered } from '../../server/metered';
 import { BUSINESSES, HttpError, all, can, today, type Ctx, type Env, type Perm } from '../../server/lib';
@@ -86,6 +87,16 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/reports/ledger', rep.ledger, 'reports'],
   ['GET', '/reports/entries/:id', rep.entryLines, 'reports'],
   ['GET', '/balances', rep.balances, ''],
+  ['GET', '/shifts/mine', shifts.myShift, ''],
+  ['POST', '/shifts/close', shifts.closeShift, ''],
+  ['GET', '/shifts/open', shifts.openShifts, ''],
+  ['GET', '/shifts/summary', shifts.shiftSummary, ''],
+  ['GET', '/shifts', shifts.listShifts, ''],
+  ['GET', '/shifts/:id', shifts.getShift, ''],
+  ['POST', '/shifts/:id/reopen', shifts.reopenShift, ''],
+  ['GET', '/period-locks', shifts.listLocks, ''],
+  ['POST', '/period-locks', shifts.lockPeriod, ''],
+  ['POST', '/period-locks/:id/unlock', shifts.unlockPeriod, ''],
   ['GET', '/closing/preview', rep.closingPreview, 'close'],
   ['GET', '/closing', rep.listClosings, ''],
   ['POST', '/closing', rep.createClosing, 'close'],

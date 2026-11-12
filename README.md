@@ -60,7 +60,7 @@ How the common mistakes are avoided:
 
 ## Business modules
 
-- **Restaurant & Cafe** (kept simple) — picture menu with prices; the waiter taps items and sends the order (**Pending**); the cashier takes payment later (Cash/Zaad/Edahab, split, or credit to a customer) and prints the receipt; order numbers restart each day; optional table; sales history with returns/cancellations; expenses (paid when recorded); customer debts; dashboard and reports. No stock, kitchen screen, purchases, suppliers, money page or daily closing — profit is sales − expenses. The owner can move restaurant money from the Owner Admin.
+- **Restaurant & Cafe** (kept simple) — picture menu with prices; the waiter taps items and sends the order (**Pending**); the cashier takes payment later (Cash/Zaad/Edahab, split, or credit to a customer) and prints the receipt; order numbers restart each day; optional table; sales history with returns/cancellations; expenses (paid when recorded); customer debts; dashboard and reports. No stock, kitchen screen, purchases, suppliers, money page or daily closing — profit is sales − expenses (minus any cash found short at shift closings). The owner can move restaurant money from the Owner Admin.
 - **Fuel Station** — fuel types and price per litre (every change kept in price history); tanks with book stock; pumps with meters; deliveries into a tank (purchases, paid or on supplier credit); **shift readings**: opening → closing meter = litres sold → money expected, then cash/mobile received and credit customers, with any shortage/overage requiring a reason; a meter that does not continue from the last reading is flagged; **tank dips** compare measured litres to the book and record the variance; **reconciliation**: start + delivered − sold ± dips = should-be-now, vs the last dip, plus daily expected/received/difference.
 - **Store** — products, categories, barcodes, purchase/selling prices, suppliers, purchases, sales, returns, waste, stock counts, customer debts, supplier payments, best sellers, low-stock alerts.
 
@@ -68,7 +68,8 @@ How the common mistakes are avoided:
 
 - Switch **All Businesses / Restaurant & Cafe / Fuel Station / Store**; **Today / This week / This month**, each compared with yesterday / the same days last week / the same days last month. Combined figures are always shown next to each business's own figures.
 - Sales, cost of goods, expenses, losses, estimated profit, money available (per business × payment method), customers owe us, we owe suppliers, stock value, money received/paid today, recent activity, and alerts: out-of-stock/low stock, low or negative tanks, fuel missing in dips, fuel shift shortages, meter gaps, cash shortages at closing, days not closed, overdue debts (no payment for 30 days), negative money balances.
-- **Daily closing** per business: opening balance, sales, debts collected, expenses, stock/supplier payments, transfers/owner money, **expected** (calculated), **counted** (entered), **difference** (explanation required). The difference is posted as a cash difference so the books match the real money — it is never hidden. Closed days are locked; only the owner/manager can reopen the latest day, with a reason, which reverses the difference.
+- **Restaurant shift closing (xisaab xidh)** — every person who takes money closes their own shift: everything they did since their last closing (no fixed hours). Per payment method (Cash, Zaad, Edahab) the system shows sales, debts collected and expenses paid from the drawer, so the **expected** amount; the person enters what they **have** (optional: change money that was already in the drawer). Any difference needs an explanation, is booked as a cash difference under their name, and appears in alerts. The money is handed to a named owner/manager, unpaid orders are handed over to the next shift, and a slip can be printed. Someone who still has an unclosed shift started on an earlier day cannot take payments or pay expenses until they close it (taking orders still works). Owner/manager see **Closings**: all shifts (reopen the latest with a reason), who has not closed yet, per-day and per-cashier totals (short/over). The owner can **close a finished month or year**: nothing dated in it can be added, changed or cancelled until reopened with a reason (all shifts with money in it must be closed first).
+- **Daily closing** per business (store, fuel station): opening balance, sales, debts collected, expenses, stock/supplier payments, transfers/owner money, **expected** (calculated), **counted** (entered), **difference** (explanation required). The difference is posted as a cash difference so the books match the real money — it is never hidden. Closed days are locked; only the owner/manager can reopen the latest day, with a reason, which reverses the difference.
 
 ## Portals and roles
 
@@ -76,7 +77,7 @@ Three independent business portals plus an owner area. Each has its own sign-in 
 
 | Address | For |
 |---|---|
-| `/restaurant` | Restaurant & Cafe: new order, orders to pay, menu, sales, expenses, customers, reports |
+| `/restaurant` | Restaurant & Cafe: new order, orders to pay, close my shift, menu, sales, expenses, customers, closings, reports |
 | `/store` | Store: point of sale, products & stock, purchases |
 | `/fuel` | Fuel Station: pumps & shifts, tanks, deliveries, fuel prices |
 | `/admin` | Owner only: all businesses together, users & roles, settings, audit log |
@@ -87,7 +88,7 @@ A person has one account and a **role in each business** they work in:
 | Role | Restaurant / Store | Fuel Station |
 |---|---|---|
 | Manager | Everything for that business except users | Same, with pump shifts instead of a till |
-| Cashier | Sell, collect debts, close the day (restaurant: take orders and payments) | Record pump shifts, collect debts, close the day |
+| Cashier | Sell, collect debts, close the day (restaurant: take orders and payments, pay small expenses, close own shift) | Record pump shifts, collect debts, close the day |
 | Staff | Sell, record stock usage/waste (restaurant: take orders and payments) | Pump readings and tank dips |
 | Owner | Everything, every business, the owner admin | |
 
@@ -115,7 +116,7 @@ Open http://localhost:8788 — the first visit asks you to create the owner acco
 npm test
 ```
 
-Starts `wrangler pages dev` on a fresh local D1 and walks through the real workflows, checking every figure against hand-calculated values: first-run setup and auth guards, cash sale with idempotent retry, split mobile payment, credit sale + debt collection, purchase on part credit (average cost), supplier payment, expense, return, cancelled sale, oversell rejection, restaurant usage/waste, fuel tank/pump/delivery/shift shortage/dip/reconciliation, inter-business transfer, daily closing with difference + lock + reopen, consolidated dashboard (all = sum of businesses), cashier permissions, and database integrity (every entry balances, stock = movements, inventory ledger = stock value, transfers net to zero, journal append-only).
+Starts `wrangler pages dev` on a fresh local D1 and walks through the real workflows, checking every figure against hand-calculated values: first-run setup and auth guards, cash sale with idempotent retry, split mobile payment, credit sale + debt collection, purchase on part credit (average cost), supplier payment, expense, return, cancelled sale, oversell rejection, restaurant usage/waste, fuel tank/pump/delivery/shift shortage/dip/reconciliation, inter-business transfer, daily closing with difference + lock + reopen, restaurant shift closing (explanation, hand-over, reopen, earlier-day block, month/year lock), consolidated dashboard (all = sum of businesses), cashier permissions, and database integrity (every entry balances, stock = movements, inventory ledger = stock value, transfers net to zero, journal append-only).
 
 ## Deploy to Cloudflare (first time)
 

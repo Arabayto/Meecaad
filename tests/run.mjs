@@ -263,7 +263,7 @@ try {
     await c.post('/auth/login', { username: 'cashier1', password: 'cashier-pass' });
     assert.equal((await c.call('GET', '/dashboard')).status, 403);
     assert.equal((await c.call('POST', '/sales', { business: 'store', items: [{ product: rice, qty: 1 }], payments: [{ method: 'cash', amount: 2500 }] })).status, 403);
-    assert.equal((await c.call('POST', '/expenses', { business: 'restaurant', category: 'x', amount: 100, method: 'cash' })).status, 403);
+    assert.equal((await c.call('POST', '/expenses', { business: 'store', category: 'x', amount: 100, method: 'cash' })).status, 403);
     await c.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
     const sale = (await owner.get('/sales?business=restaurant'))[0];
     assert.equal((await c.call('POST', `/sales/${sale.id}/void`, { reason: 'x' })).status, 403, 'cashier cannot cancel sales');
@@ -311,7 +311,7 @@ try {
     assert.equal((await tr.call('GET', '/dashboard?business=restaurant')).status, 403, 'cashier does not see the restaurant dashboard');
     assert.deepEqual((await tr.get('/dashboard?business=all')).scope, ['store'], 'combined view only covers businesses with report access');
     await tr.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
-    assert.equal((await tr.call('POST', '/expenses', { business: 'restaurant', category: 'x', amount: 100, method: 'cash' })).status, 403);
+    assert.equal((await tr.call('POST', '/products', { business: 'restaurant', name: 'Juice', kind: 'menu', salePrice: 100 })).status, 403, 'restaurant cashier cannot change the menu');
     assert.equal((await tr.call('GET', '/fuel/setup')).status, 403);
     assert.equal((await tr.call('GET', '/users')).status, 403);
   });
@@ -381,6 +381,105 @@ try {
       ['POST', `/products/${tea}/image`, { data: null }]]) {
       assert.equal((await sc.call(m, path, body)).status, 403, `${m} ${path}`);
     }
+  });
+
+  await step('restaurant shift closing (xisaab xidh): count, explain, hand over, reopen, earlier-day block, month lock', async () => {
+    await owner.post('/users', { fullName: 'Shift Cashier', username: 'shiftc', password: 'shift-pass-1', access: { restaurant: 'cashier' } });
+    await owner.post('/users', { fullName: 'Rest Manager', username: 'rmgr', password: 'rmgr-pass-1', access: { restaurant: 'manager' } });
+    const c = client(), m = client();
+    await c.post('/auth/login', { username: 'shiftc', password: 'shift-pass-1' });
+    await m.post('/auth/login', { username: 'rmgr', password: 'rmgr-pass-1' });
+    const mgrId = (await m.get('/bootstrap')).user.id;
+    const cashierId = (await c.get('/bootstrap')).user.id;
+    assert.equal((await c.get('/shifts/mine?business=restaurant')).activity, 0);
+    assert.equal((await c.call('POST', '/shifts/close', { business: 'restaurant', counted: {}, handedTo: mgrId })).status, 400, 'nothing to close');
+    assert.equal((await c.call('GET', '/shifts?business=restaurant')).status, 403, 'cashier does not see everyone');
+    assert.equal((await c.call('GET', '/shifts/mine?business=store')).status, 400, 'restaurant only');
+
+    // Work: two sales (cash, Zaad) and a small expense paid from the drawer.
+    await c.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 4 }], payments: [{ method: 'cash', amount: 200 }] });
+    await c.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 2 }], payments: [{ method: 'zaad', amount: 100 }] });
+    await c.post('/expenses', { business: 'restaurant', category: 'Water', amount: 30, method: 'cash' });
+    const mine = await c.get('/shifts/mine?business=restaurant');
+    const line = (id) => mine.lines.find((l) => l.method_id === id);
+    assert.deepEqual([line('cash').sales_in, line('cash').expenses_out, line('cash').expected, line('zaad').expected], [200, -30, 170, 100]);
+    assert.deepEqual([mine.sales.count, mine.sales.total, mine.expenses, mine.mustClose], [2, 300, 30, false]);
+    assert.ok(mine.receivers.some((r) => r.id === mgrId) && mine.receivers.some((r) => r.role === 'owner'));
+    assert.ok(!mine.receivers.some((r) => r.id === cashierId), 'a cashier cannot receive the money');
+
+    const counted = { cash: 180, zaad: 100, edahab: 0 };   // 20 change money at start → expected cash 190, 10 missing
+    const base = { business: 'restaurant', counted, startFloat: 20, handedTo: mgrId };
+    assert.equal((await c.call('POST', '/shifts/close', base)).status, 400, 'difference needs an explanation');
+    assert.equal((await c.call('POST', '/shifts/close', { ...base, explanation: 'x', handedTo: cashierId })).status, 400, 'must hand to owner/manager');
+    assert.equal((await c.call('POST', '/shifts/close', { ...base, explanation: 'x', counted: { cash: 180 } })).status, 400, 'every method counted');
+    const d0 = (await owner.get('/dashboard?business=restaurant')).figures.today.restaurant;
+    const key = crypto.randomUUID();
+    const closed = await c.post('/shifts/close', { ...base, explanation: 'Gave wrong change' }, key);
+    assert.equal((await c.post('/shifts/close', { ...base, explanation: 'Gave wrong change' }, key)).id, closed.id, 'double tap closes once');
+    const slip = await c.get(`/shifts/${closed.id}`);
+    assert.deepEqual([slip.total_expected, slip.total_counted, slip.total_difference, slip.handed_to_name, slip.start_float], [290, 280, -10, 'Rest Manager', 20]);
+    assert.equal(slip.lines.find((l) => l.method_id === 'cash').difference, -10);
+    const d1 = (await owner.get('/dashboard?business=restaurant')).figures.today.restaurant;
+    assert.deepEqual([d1.cashDiff - d0.cashDiff, d0.profit - d1.profit], [10, 10], 'shortage counts as a loss');
+    assert.equal((await c.get('/shifts/mine?business=restaurant')).activity, 0, 'new shift starts empty');
+    assert.equal((await c.call('POST', '/shifts/close', { ...base, explanation: 'again' })).status, 400, 'cannot close twice');
+    const alerts = (await owner.get('/dashboard?business=restaurant')).alerts;
+    assert.ok(alerts.some((a) => /Shift Cashier's shift short \$0\.10/.test(a.title)));
+
+    // Manager sees every shift and the per-cashier totals; reopens; the cashier closes again correctly.
+    const list = await m.get(`/shifts?business=restaurant&from=${today}&to=${today}`);
+    assert.ok(list.find((x) => x.id === closed.id).is_latest);
+    const sum1 = await m.get(`/shifts/summary?business=restaurant&from=${today}&to=${today}`);
+    assert.equal(sum1.cashiers.find((x) => x.user_id === cashierId).short, -10);
+    assert.equal((await c.call('POST', `/shifts/${closed.id}/reopen`, { reason: 'x' })).status, 403, 'cashier cannot reopen');
+    assert.equal((await m.call('POST', `/shifts/${closed.id}/reopen`, {})).status, 400, 'reason required');
+    await m.post(`/shifts/${closed.id}/reopen`, { reason: 'Found the 10 cents' });
+    assert.equal((await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.cashDiff, d0.cashDiff, 'difference reversed');
+    const again = await c.get('/shifts/mine?business=restaurant');
+    assert.equal(again.lines.find((l) => l.method_id === 'cash').expected, 170, 'reopened shift is open again');
+    assert.ok((await m.get('/shifts/open?business=restaurant')).some((o) => o.user_id === cashierId));
+    await c.post('/shifts/close', { business: 'restaurant', counted: { cash: 170, zaad: 100, edahab: 0 }, handedTo: mgrId });
+
+    // Recording yesterday's forgotten sale today is fine: the shift is judged by when the work was done.
+    const yesterday = new Date(Date.parse(today + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10);
+    await c.post('/sales', { business: 'restaurant', date: yesterday, items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
+    await c.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
+    await c.post('/shifts/close', { business: 'restaurant', counted: { cash: 100, zaad: 0, edahab: 0 }, handedTo: mgrId });
+    // A shift left open since yesterday blocks new payments until it is closed.
+    await owner.post('/users', { fullName: 'Night Cashier', username: 'nightc', password: 'night-pass-1', access: { restaurant: 'cashier' } });
+    const n = client();
+    await n.post('/auth/login', { username: 'nightc', password: 'night-pass-1' });
+    const ns = await n.post('/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
+    const lastNight = `${yesterday}T18:00:00.000Z`;
+    sql(`DROP TRIGGER journal_entries_no_update; UPDATE journal_entries SET created_at = '${lastNight}' WHERE ref_id = '${ns.id}';
+         CREATE TRIGGER journal_entries_no_update BEFORE UPDATE ON journal_entries BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
+         UPDATE app_settings SET value = '${yesterday}T00:00:00.000Z' WHERE key = 'shifts_since';`);
+    const blocked = await n.call('POST', '/sales', { business: 'restaurant', items: [{ product: tea, qty: 1 }], payments: [{ method: 'cash', amount: 50 }] });
+    assert.equal(blocked.status, 409); assert.match(blocked.data.message, new RegExp(`Close your shift from ${yesterday}`));
+    assert.equal((await n.call('POST', '/expenses', { business: 'restaurant', category: 'x', amount: 10, method: 'cash' })).status, 409);
+    const order = (await n.post('/restaurant/orders', { items: [{ product: tea, qty: 1 }] })).id;   // taking orders is still fine
+    assert.equal((await n.call('POST', `/restaurant/orders/${order}/pay`, { payments: [{ method: 'cash', amount: 50 }] })).status, 409);
+    const nm = await n.get('/shifts/mine?business=restaurant');
+    assert.deepEqual([nm.mustClose, nm.firstDate, nm.unpaid.count >= 1], [true, yesterday, true]);
+    assert.ok((await owner.get('/dashboard?business=restaurant')).alerts.some((a) => a.title === 'Shift not closed: Night Cashier'));
+    const nc = await n.post('/shifts/close', { business: 'restaurant', counted: { cash: 50, zaad: 0, edahab: 0 }, handedTo: mgrId });
+    assert.ok((await n.get(`/shifts/${nc.id}`)).unpaid_orders >= 1, 'unpaid orders are handed over on the slip');
+    await n.post(`/restaurant/orders/${order}/pay`, { payments: [{ method: 'cash', amount: 50 }] });
+
+    // Month / year closing (owner only, finished periods only).
+    const month = today.slice(0, 7);
+    const [y, mo] = month.split('-').map(Number);
+    const lastMonth = mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`;
+    assert.equal((await owner.call('POST', '/period-locks', { business: 'restaurant', period: month })).status, 400, 'month not finished');
+    assert.equal((await m.call('POST', '/period-locks', { business: 'restaurant', period: lastMonth })).status, 403, 'only the owner');
+    const lock = await owner.post('/period-locks', { business: 'restaurant', period: lastMonth });
+    assert.equal((await owner.call('POST', '/period-locks', { business: 'restaurant', period: lastMonth })).status, 409, 'already closed');
+    const old = await owner.call('POST', '/expenses', { business: 'restaurant', category: 'Late bill', amount: 10, method: 'cash', date: `${lastMonth}-15` });
+    assert.equal(old.status, 409); assert.match(old.data.message, /is closed/);
+    assert.equal((await owner.call('POST', `/period-locks/${lock.id}/unlock`, {})).status, 400, 'reason required');
+    await owner.post(`/period-locks/${lock.id}/unlock`, { reason: 'Late bill arrived' });
+    assert.equal((await owner.get('/period-locks?business=restaurant'))[0].status, 'unlocked');
+    await owner.post('/period-locks', { business: 'restaurant', period: String(y - 1) });
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

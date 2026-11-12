@@ -6,6 +6,7 @@ import {
   HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, placeholders,
   partyIn, qty, requireBiz, round3, str, today, type Ctx, type Line,
 } from './lib';
+import { assertShiftCurrent } from './shifts';
 
 /** Weighted-average cost update, run before stock is added (or removed with negative qty). */
 const REPRICE = `UPDATE products SET avg_cost = CASE
@@ -68,6 +69,7 @@ export async function prepareSale(ctx: Ctx, b: any) {
   const customer = await partyIn(ctx.db, 'customer', b.customer, business);
   if (credit > 0 && !customer) throw bad(`Choose the customer who owes the unpaid ${(credit / 100).toFixed(2)}`);
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   // Cost of goods = exactly what leaves stock (stock-counted items; the restaurant counts none), so inventory and the journal agree.
   const stockOut = lines.reduce((s: number, l: any) => s + l.cost, 0);
 
@@ -134,6 +136,7 @@ export async function voidSale(ctx: Ctx) {
   const reason = str(ctx.body.reason, 'Reason', { required: true, max: 300 });
   const date = today();
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE sales SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), s.id);
   for (const i of await all<any>(ctx.db, `SELECT si.*, p.track_stock FROM sale_items si JOIN products p ON p.id = si.product_id WHERE sale_id = ?`, s.id)) {
@@ -156,6 +159,7 @@ export async function returnSale(ctx: Ctx) {
   const reason = str(b.reason, 'Reason', { required: true, max: 300 });
   const date = today();
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const saleItems = await all<any>(ctx.db, `SELECT si.*, p.track_stock FROM sale_items si JOIN products p ON p.id = si.product_id WHERE sale_id = ?`, s.id);
   const factor = s.subtotal > 0 ? s.total / s.subtotal : 0;   // share of each line after the sale discount
   const chosen = (Array.isArray(b.items) ? b.items : []).map((r: any) => {
@@ -212,6 +216,7 @@ export async function createPurchase(ctx: Ctx) {
   const business = requireBiz(ctx, b.business, 'purchase');
   const date = entryDate(b.date);
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const items = Array.isArray(b.items) ? b.items : [];
   if (!items.length) throw bad('Add at least one item');
   const products = await all<any>(ctx.db, `SELECT * FROM products WHERE business_id = ? AND track_stock = 1 AND id IN (${placeholders(items)})`,
@@ -272,6 +277,7 @@ export async function voidPurchase(ctx: Ctx) {
   const reason = str(ctx.body.reason, 'Reason', { required: true, max: 300 });
   const date = today();
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE purchases SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), pu.id);
   for (const i of await all<any>(ctx.db, 'SELECT * FROM purchase_items WHERE purchase_id = ?', pu.id)) {
@@ -310,6 +316,7 @@ async function expenseHead(ctx: Ctx) {
   const business = requireBiz(ctx, ctx.body.business, 'expense');
   const date = entryDate(ctx.body.date);
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   return { business, date };
 }
 
@@ -350,6 +357,7 @@ export async function voidExpense(ctx: Ctx) {
   const reason = str(ctx.body.reason, 'Reason', { required: true, max: 300 });
   const date = today();
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE expenses SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), e.id);
   await tx.reverse('expense', e.id, date, 'expense_void', `Cancelled expense (${e.category}): ${reason}`);
@@ -368,6 +376,7 @@ export async function createMovement(ctx: Ctx) {
   const business = requireBiz(ctx, b.business, type === 'customer_payment' && b.business === 'fuel' ? 'fuel' : MOVEMENT_PERM[type]);
   const date = entryDate(b.date);
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   const amount = cents(b.amount, 'Amount', { min: 1 });
   const method = await paymentMethod(ctx.db, b.method);
   const note = str(b.note, 'Note', { max: 300 });
@@ -435,6 +444,7 @@ export async function voidMovement(ctx: Ctx) {
   const reason = str(ctx.body.reason, 'Reason', { required: true, max: 300 });
   const date = today();
   await assertDayOpen(ctx.db, business, date);
+  await assertShiftCurrent(ctx, business);
   if (m.to_business_id && m.to_business_id !== business) await assertDayOpen(ctx.db, m.to_business_id, date);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE money_movements SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), m.id);

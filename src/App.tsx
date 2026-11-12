@@ -7,6 +7,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
 import { NewOrderPage, OrdersPage } from './pages/RestaurantPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
+import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
 import { SalesPage } from './pages/SalesPage';
 import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
@@ -92,6 +93,8 @@ function PortalPage() {
     expenses: [['expense'], <ExpensesPage />],
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <RestaurantReports />],
+    shift: [['sell'], <ShiftPage />],
+    closings: [['reports'], <ClosingsPage />],
   } : {
     ...(p === 'fuel' ? {
       pumps: [['fuel', 'reports'], <FuelPage />],

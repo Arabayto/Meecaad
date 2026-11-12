@@ -17,10 +17,12 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'New Order', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
     { label: 'Orders', path: '/order-list', icon: ClipboardList, perms: ['sell'] },
+    { label: 'Close My Shift', path: '/shift', icon: Wallet, perms: ['sell'] },
     { label: 'Sales History', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
     { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },
+    { label: 'Closings', path: '/closings', icon: ClipboardCheck, perms: ['reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
   ],
   store: [

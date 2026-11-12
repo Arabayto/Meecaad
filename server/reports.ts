@@ -153,6 +153,25 @@ async function buildAlerts(db: D1Database, scope: string[]) {
     alerts.push({ level: r.total_difference < 0 ? 'red' : 'yellow', business: r.business_id, title: `Cash ${r.total_difference < 0 ? 'short' : 'over'} ${money(Math.abs(r.total_difference))} at closing`,
       detail: `${r.entry_date}: ${r.explanation}`, link: '/closing' });
   }
+  if (scope.includes('restaurant')) {
+    for (const r of await all<any>(db, `SELECT s.*, u.full_name FROM shift_closings s JOIN users u ON u.id = s.user_id
+        WHERE s.business_id = 'restaurant' AND s.status = 'closed' AND s.total_difference <> 0 AND s.closed_at >= ? ORDER BY s.closed_at DESC LIMIT 20`, addDays(t, -7))) {
+      alerts.push({ level: r.total_difference < 0 ? 'red' : 'yellow', business: 'restaurant',
+        title: `${r.full_name}'s shift ${r.total_difference < 0 ? 'short' : 'over'} ${money(Math.abs(r.total_difference))}`,
+        detail: `${r.closed_at.slice(0, 10)}: ${r.explanation}`, link: '/closings' });
+    }
+    // Someone still holds money from an earlier day without closing their shift.
+    const dayStart = new Date(Date.parse(t + 'T00:00:00Z') - 3 * 3600_000).toISOString();   // start of today, East Africa Time
+    for (const r of await all<any>(db, `SELECT u.full_name, MIN(e.created_at) AS since FROM journal_entries e JOIN users u ON u.id = e.created_by
+        WHERE e.business_id = 'restaurant' AND e.created_at < ? AND e.created_at > MAX(COALESCE((SELECT value FROM app_settings WHERE key = 'shifts_since'), ''),
+          COALESCE((SELECT MAX(x.to_ts) FROM shift_closings x WHERE x.business_id = 'restaurant' AND x.user_id = e.created_by AND x.status = 'closed'), ''))
+          AND e.type NOT IN ('shift_diff', 'shift_reopen', 'transfer', 'transfer_void', 'owner_in', 'owner_in_void', 'owner_out', 'owner_out_void', 'opening_stock')
+          AND e.created_at > ?
+        GROUP BY e.created_by`, dayStart, addDays(t, -60))) {
+      const since = new Date(Date.parse(r.since) + 3 * 3600_000).toISOString().slice(0, 10);
+      alerts.push({ level: 'yellow', business: 'restaurant', title: `Shift not closed: ${r.full_name}`, detail: `Has money from ${since} that is not counted and closed yet.`, link: '/closings' });
+    }
+  }
   const yesterday = addDays(t, -1);
   for (const b of scope.filter((x) => BUSINESS_FEATURES[x]?.includes('close'))) {
     const closed = await first<any>(db, `SELECT MAX(entry_date) AS d FROM daily_closings WHERE business_id = ? AND status = 'closed'`, b);
