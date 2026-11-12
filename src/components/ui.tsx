@@ -174,7 +174,7 @@ export function useFilters<T>(rows: T[], defs: FilterDef<T>[], text?: (row: T) =
         return (
           <select key={d.key} className="form-select filter-bar__select" value={sel[d.key] ?? ''} onChange={(e) => setSel({ ...sel, [d.key]: e.target.value })} aria-label={d.label}>
             <option value="">{d.label}: all</option>
-            {options.map((o) => <option key={o} value={o}>{o}</option>)}
+            {options.map((o) => <option key={o} value={o}>{d.label}: {o}</option>)}
           </select>
         );
       })}

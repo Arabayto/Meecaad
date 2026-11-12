@@ -3,7 +3,7 @@ import { ArrowRightLeft, Wallet } from 'lucide-react';
 import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
-import { BizTag, DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
+import { BizTag, DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, addDays, fmtTime, useLoad, useSubmit } from '../components/ui';
 
 const TYPE_LABEL: Record<string, string> = {
   customer_payment: 'Debt collected', supplier_payment: 'Supplier paid', transfer: 'Transfer', owner_in: 'Owner added money', owner_out: 'Owner took money',
@@ -18,12 +18,6 @@ export function MoneyPage() {
   const [from, setFrom] = useState(addDays(today, -30));
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/money', { business: scope, from, to }), [scope, from, to]);
-  const filter = useFilters<any>(list.data ?? [], [
-    { key: 'type', label: 'Type', get: (m) => TYPE_LABEL[m.type] },
-    { key: 'by', label: 'Recorded by', get: (m) => m.created_by_name },
-    { key: 'method', label: 'Account', get: (m) => m.method_name },
-    { key: 'status', label: 'Status', get: (m) => (m.status === 'voided' ? 'Cancelled' : 'Done') },
-  ], (m) => `${m.note ?? ''} ${m.customer_name ?? ''} ${m.supplier_name ?? ''} ${m.created_by_name}`, 'Search note, customer, supplier');
   const [type, setType] = useState('transfer');
   const home = business || allBusinesses[0]?.id || '';
   const [f, setF] = useState({ business: home, method: 'cash', toBusiness: home, toMethod: 'zaad', amount: '', note: '', date: today });
@@ -105,24 +99,22 @@ export function MoneyPage() {
 
       <div className="panel">
         <div className="panel__header"><div><p>History</p><h2>Payments, transfers and owner money</h2></div><DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} /></div>
-        {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>When</th><th>Type</th><th>Business</th><th>Details</th><th className="num">Amount</th><th>Status</th><th>Recorded by</th><th></th></tr></thead>
+            <thead><tr><th>When</th><th>Type</th><th>Business</th><th>Details</th><th className="num">Amount</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {filter.shown.map((m: any) => (
+              {(list.data ?? []).map((m: any) => (
                 <tr key={m.id}>
-                  <td className="small">{m.entry_date}<div className="muted">{fmtTime(m.created_at)}</div></td>
+                  <td className="small">{m.entry_date}<div className="muted">{fmtTime(m.created_at)} · {m.created_by_name}</div></td>
                   <td>{TYPE_LABEL[m.type]}</td>
                   <td><BizTag id={m.business_id} />{m.to_business_id && m.to_business_id !== m.business_id && <> → <BizTag id={m.to_business_id} /></>}</td>
                   <td className="small">{m.method_name}{m.to_method_name && ` → ${m.to_method_name}`}{m.customer_name && ` · ${m.customer_name}`}{m.supplier_name && ` · ${m.supplier_name}`}{m.note && ` · ${m.note}`}</td>
                   <td className="num"><Money c={m.amount} /></td>
                   <td>{m.status === 'voided' ? <><StatusBadge label="Cancelled" tone="red" /><div className="small muted">{m.void_reason}</div></> : <StatusBadge label="Done" tone="green" />}</td>
-                  <td className="small"><strong>{m.created_by_name}</strong></td>
                   <td>{can('void') && m.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(m)}>Cancel</button>}</td>
                 </tr>
               ))}
-              {!list.loading && !filter.shown.length && <tr><td colSpan={8} className="muted">{filter.active ? 'Nothing matches.' : 'Nothing in this period.'}</td></tr>}
+              {!list.loading && !list.data?.length && <tr><td colSpan={7} className="muted">Nothing in this period.</td></tr>}
             </tbody>
           </table>
         </div>

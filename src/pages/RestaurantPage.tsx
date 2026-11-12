@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
-import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useLoad, useSubmit, type PayLine } from '../components/ui';
+import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useFilters, useLoad, useSubmit, type PayLine } from '../components/ui';
 
 // A picture for items that have none yet, guessed from the name.
 const EMOJI: [RegExp, string][] = [
@@ -259,7 +259,11 @@ export function OrdersPage() {
   const [cancelling, setCancelling] = useState<any>(null);
   const [ticket, setTicket] = useState<any>(null);
   const [receipt, setReceipt] = useState<any>(null);
-  const list = orders.data ?? [];
+  const filter = useFilters<any>(orders.data ?? [], [
+    { key: 'by', label: 'Taken by', get: (o) => o.created_by_name },
+    { key: 'table', label: 'Table', get: (o) => o.table_name ?? 'No table' },
+  ], (o) => `${o.number ?? ''} #${o.number ?? ''} ${o.label ?? ''} ${o.table_name ?? ''} ${o.note ?? ''} ${o.items.map((i: any) => i.name).join(' ')} ${o.created_by_name}`, 'Search order #, name, item');
+  const list = filter.shown;
   const unpaid = (orders.data ?? []).reduce((s: number, o: any) => s + o.total, 0);
 
   return (
@@ -267,7 +271,8 @@ export function OrdersPage() {
       <PageHeader icon={<ClipboardList size={22} />} title="Orders" subtitle={`${orders.data?.length ?? 0} open orders · ${money(unpaid)} not paid yet`}
         actions={<button type="button" className="btn btn-primary" onClick={() => navigate(path('/orders'))}><Plus size={16} /> New order</button>} />
       <ErrorBox error={orders.error} />
-      {!orders.loading && !list.length && <div className="mc-note">No pending orders. New orders appear here automatically.</div>}
+      {(orders.data?.length ?? 0) > 1 && filter.bar}
+      {!orders.loading && !list.length && <div className="mc-note">{filter.active ? 'No order matches.' : 'No pending orders. New orders appear here automatically.'}</div>}
       <div className="orders-grid">
         {list.map((o: any) => (
           <div key={o.id} className="order-card">

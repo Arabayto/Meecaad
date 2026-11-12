@@ -9,12 +9,12 @@ export interface Business { id: string; name: string; kind: 'restaurant' | 'fuel
 export interface Method { id: string; name: string; active: number }
 
 // Mirrors server/lib.ts BUSINESS_FEATURES and BIZ_ROLE_PERMS (the server enforces; this only hides what cannot be used).
-const BUSINESS_FEATURES: Record<string, Perm[]> = {
+export const BUSINESS_FEATURES: Record<string, Perm[]> = {
   restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
   store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
   fuel: ['fuel', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
 };
-const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
+export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
     restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],

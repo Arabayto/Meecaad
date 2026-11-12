@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
-import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, Stat, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, Stat, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
 const R = 'restaurant';
 const COLS: [string, string][] = [['sales_in', 'Sales'], ['collections', 'Debts collected'], ['expenses_out', 'Expenses paid'], ['other', 'Other']];
@@ -203,16 +203,23 @@ export function ClosingsPage() {
 function ShiftsTab({ from, to }: { from: string; to: string }) {
   const { can } = useAuth();
   const list = useLoad(() => get('/shifts', { business: R, from, to }), [from, to]);
+  const filter = useFilters<any>(list.data ?? [], [
+    { key: 'person', label: 'Person', get: (c) => c.user_name },
+    { key: 'to', label: 'Handed to', get: (c) => c.handed_to_name },
+    { key: 'diff', label: 'Result', get: (c) => (c.total_difference < 0 ? 'Short' : c.total_difference > 0 ? 'Over' : 'Exact') },
+    { key: 'status', label: 'Status', get: (c) => (c.status === 'closed' ? 'Closed' : 'Reopened') },
+  ]);
   const [slip, setSlip] = useState<any>(null);
   const [reopen, setReopen] = useState<any>(null);
   return (
     <div className="panel">
       <ErrorBox error={list.error} />
+      {filter.bar}
       <div className="table-wrap">
         <table>
           <thead><tr><th>Closed</th><th>Person</th><th className="num">Sales</th><th className="num">Expenses</th><th className="num">Expected</th><th className="num">Handed over</th><th className="num">Difference</th><th>Handed to</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            {(list.data ?? []).map((c: any) => (
+            {filter.shown.map((c: any) => (
               <tr key={c.id} className="tr--clickable" onClick={async () => setSlip(await get(`/shifts/${c.id}`))}>
                 <td>{fmtTime(c.closed_at)}<div className="small muted">{c.closed_at.slice(0, 10)}</div></td>
                 <td><strong>{c.user_name}</strong></td>
@@ -224,7 +231,7 @@ function ShiftsTab({ from, to }: { from: string; to: string }) {
                 <td onClick={(e) => e.stopPropagation()}>{can('void') && c.status === 'closed' && Boolean(c.is_latest) && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setReopen(c)}>Reopen</button>}</td>
               </tr>
             ))}
-            {!list.loading && !list.data?.length && <tr><td colSpan={10} className="muted">No shifts closed in this period.</td></tr>}
+            {!list.loading && !filter.shown.length && <tr><td colSpan={10} className="muted">{filter.active ? 'Nothing matches.' : 'No shifts closed in this period.'}</td></tr>}
           </tbody>
         </table>
       </div>

@@ -64,6 +64,17 @@ How the common mistakes are avoided:
 - **Fuel Station** — fuel types and price per litre (every change kept in price history); tanks with book stock; pumps with meters; deliveries into a tank (purchases, paid or on supplier credit); **shift readings**: opening → closing meter = litres sold → money expected, then cash/mobile received and credit customers, with any shortage/overage requiring a reason; a meter that does not continue from the last reading is flagged; **tank dips** compare measured litres to the book and record the variance; **reconciliation**: start + delivered − sold ± dips = should-be-now, vs the last dip, plus daily expected/received/difference.
 - **Store** — products, categories, barcodes, purchase/selling prices, suppliers, purchases, sales, returns, waste, stock counts, customer debts, supplier payments, best sellers, low-stock alerts.
 
+## Users, roles and security
+
+- **Users & Roles** (owner only; in the Owner Admin and the restaurant portal): one account per person with a role in each business; search and filter by business, role and status; last sign-in and devices signed in; sign a person out on every device (e.g. a lost phone); unlock an account; a table of what each role can do; sign-in history (successful and failed attempts, with address).
+- **Passwords:** at least 8 characters with letters and numbers, not the username, not a well-known password; stored with PBKDF2-SHA256. Changing a password signs out every other device.
+- **Sign-in protection:** 5 wrong passwords lock an account for 15 minutes; 20 failures from one address in 15 minutes block that address for 15 minutes (even across usernames). Sign-ins are written to the audit log.
+- **Sessions:** random token in an HttpOnly, Secure, SameSite=Strict cookie (only its hash is stored); ends after 12 hours unused and after 7 days at most. Changing someone's role, password or blocking them signs them out.
+- **Requests:** changes must come from the app's own page (header + same-origin check), only GET/POST/PATCH, size-limited, strict JSON. Every permission is checked on the server; the screens only hide what cannot be used.
+- **Browser headers:** strict Content-Security-Policy, HSTS, no framing, no referrer, no sniffing, cross-origin isolation; search engines are told not to index the site.
+- There is always at least one active owner. Records are never deleted: the journal and audit log are append-only.
+- **Who did what:** lists show who recorded each entry (sales, expenses, orders, closings), and can be searched and filtered by person, status, category and payment method.
+
 ## Owner dashboard, closing, alerts
 
 - Switch **All Businesses / Restaurant & Cafe / Fuel Station / Store**; **Today / This week / This month**, each compared with yesterday / the same days last week / the same days last month. Combined figures are always shown next to each business's own figures.

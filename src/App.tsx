@@ -94,6 +94,7 @@ function PortalPage() {
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <RestaurantReports />],
     shift: [['sell'], <ShiftPage />],
+    users: [['users'], <UsersPage />],
     closings: [['reports'], <ClosingsPage />],
   } : {
     ...(p === 'fuel' ? {

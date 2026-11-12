@@ -23,7 +23,6 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['PATCH', '/users/:id', auth.updateUser, 'users'],
   ['POST', '/users/:id/signout', auth.signOutUser, 'users'],
   ['GET', '/signins', auth.signInLog, 'users'],
-  ['GET', '/staff', staffList, ''],
 
   ['GET', '/payment-methods', cat.listMethods, ''],
   ['POST', '/payment-methods', cat.createMethod, 'users'],
@@ -107,15 +106,6 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['POST', '/closing/:id/reopen', rep.reopenClosing, 'void'],
   ['GET', '/audit', rep.auditLog, 'users'],
 ];
-
-/** People who work in the businesses this user can see (for "recorded by" filters). Names only. */
-async function staffList(ctx: Ctx) {
-  const scope = ctx.user.businesses;
-  if (!scope.length) return [];
-  return all(ctx.db, `SELECT u.id, u.full_name FROM users u WHERE u.role = 'owner'
-    OR EXISTS (SELECT 1 FROM user_businesses ub WHERE ub.user_id = u.id AND ub.business_id IN (${scope.map(() => '?').join(',')}))
-    ORDER BY u.full_name`, ...scope);
-}
 
 async function bootstrap(ctx: Ctx) {
   const [businesses, methods] = await Promise.all([

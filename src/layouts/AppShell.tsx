@@ -24,6 +24,7 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },
     { label: 'Closings', path: '/closings', icon: ClipboardCheck, perms: ['reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
+    { label: 'Users & Roles', path: '/users', icon: BookOpen, perms: ['users'] },   // owner only
   ],
   store: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },

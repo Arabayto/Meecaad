@@ -482,6 +482,65 @@ try {
     await owner.post('/period-locks', { business: 'restaurant', period: String(y - 1) });
   });
 
+  await step('security: owner has no shift, passwords, sessions, sign-in limits, users & roles', async () => {
+    // The owner's money is not drawer money.
+    assert.equal((await owner.get('/shifts/mine?business=restaurant')).owner, true);
+    assert.equal((await owner.call('POST', '/shifts/close', { business: 'restaurant', counted: {} })).status, 400);
+    assert.ok(!(await owner.get('/shifts/open?business=restaurant')).some((o) => o.user_name === 'Owner'));
+    // Passwords.
+    for (const [password, why] of [['short1', 'too short'], ['onlyletters', 'no numbers'], ['password123', 'common'], ['weakuser12', 'contains username']]) {
+      const r = await owner.call('POST', '/users', { fullName: 'Weak', username: 'weakuser', password, access: { restaurant: 'staff' } });
+      assert.equal(r.status, 400, why);
+    }
+    assert.equal((await owner.call('POST', '/users', { fullName: 'Bad', username: 'has space', password: 'good-pass-12', access: { restaurant: 'staff' } })).status, 400);
+    assert.equal((await owner.call('POST', '/users', { fullName: 'Dup', username: 'SHIFTC', password: 'good-pass-12', access: { restaurant: 'staff' } })).status, 409, 'usernames are unique, any case');
+    const sec = (await owner.post('/users', { fullName: 'Sec Test', username: 'sectest', password: 'good-pass-12', access: { restaurant: 'cashier' } })).id;
+    // Requests from another site are refused even with the header.
+    const cross = await fetch(`${BASE}/sales`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'meecaad', Origin: 'https://evil.example', Cookie: owner.cookie() }, body: '{}' });
+    assert.equal(cross.status, 403);
+    const del = await fetch(`${BASE}/users/${sec}`, { method: 'DELETE', headers: { 'X-Requested-With': 'meecaad', Cookie: owner.cookie() } });
+    assert.equal(del.status, 405);
+    const badJson = await fetch(`${BASE}/expenses`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'meecaad', Cookie: owner.cookie() }, body: '{oops' });
+    assert.equal(badJson.status, 400);
+    // Two devices; changing the password keeps this one and signs out the other.
+    const a = client(), b2 = client();
+    await a.post('/auth/login', { username: 'sectest', password: 'good-pass-12' });
+    await b2.post('/auth/login', { username: 'sectest', password: 'good-pass-12' });
+    assert.equal((await owner.get('/users')).find((u) => u.id === sec).sessions, 2);
+    assert.equal((await a.call('POST', '/auth/password', { currentPassword: 'good-pass-12', newPassword: 'good-pass-12' })).status, 400, 'must be new');
+    await a.post('/auth/password', { currentPassword: 'good-pass-12', newPassword: 'better-pass-34' });
+    assert.equal((await a.call('GET', '/bootstrap')).status, 200);
+    assert.equal((await b2.call('GET', '/bootstrap')).status, 401, 'other device signed out');
+    // Owner signs a person out everywhere.
+    await owner.post(`/users/${sec}/signout`, {});
+    assert.equal((await a.call('GET', '/bootstrap')).status, 401);
+    // Sessions end after 12 hours without use.
+    await a.post('/auth/login', { username: 'sectest', password: 'better-pass-34' });
+    sql(`UPDATE sessions SET last_seen_at = '${new Date(Date.now() - 13 * 3600_000).toISOString()}' WHERE user_id = '${sec}'`);
+    assert.equal((await a.call('GET', '/bootstrap')).status, 401, 'idle session ended');
+    // 5 wrong passwords lock the account; the owner can unlock it.
+    for (let i = 0; i < 5; i++) assert.equal((await a.call('POST', '/auth/login', { username: 'sectest', password: 'nope-' + i })).status, 401);
+    assert.equal((await a.call('POST', '/auth/login', { username: 'sectest', password: 'better-pass-34' })).status, 429);
+    assert.ok((await owner.get('/users')).find((u) => u.id === sec).locked_until);
+    assert.equal((await a.call('PATCH', `/users/${sec}`, { unlock: true })).status, 401);
+    await owner.ok('PATCH', `/users/${sec}`, { unlock: true });
+    await a.post('/auth/login', { username: 'sectest', password: 'better-pass-34' });
+    assert.equal((await a.call('GET', '/users')).status, 403, 'only the owner manages users');
+    assert.equal((await a.call('GET', '/signins')).status, 403);
+    const log = await owner.get('/signins');
+    assert.ok(log.some((x) => x.username === 'sectest' && !x.ok) && log.some((x) => x.username === 'sectest' && x.ok));
+    assert.ok((await owner.get('/users')).find((u) => u.id === sec).last_login_at);
+    // There is always an active owner.
+    const me = (await owner.get('/bootstrap')).user.id;
+    assert.equal((await owner.call('PATCH', `/users/${me}`, { active: false })).status, 400);
+    // One address guessing many passwords (even for different usernames) is slowed down.
+    const g = client();
+    let limited = false;
+    for (let i = 0; i < 25 && !limited; i++) limited = (await g.call('POST', '/auth/login', { username: `guess${i}`, password: 'x1234567' })).status === 429;
+    assert.ok(limited, 'too many failures from one device');
+    sql(`DELETE FROM login_attempts`);   // let the rest of the run sign in again
+  });
+
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
     assert.deepEqual(sql('SELECT entry_id, SUM(amount) s FROM journal_lines GROUP BY entry_id HAVING s <> 0'), []);
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);
