@@ -21,6 +21,9 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/users', auth.listUsers, 'users'],
   ['POST', '/users', auth.createUser, 'users'],
   ['PATCH', '/users/:id', auth.updateUser, 'users'],
+  ['POST', '/users/:id/signout', auth.signOutUser, 'users'],
+  ['GET', '/signins', auth.signInLog, 'users'],
+  ['GET', '/staff', staffList, ''],
 
   ['GET', '/payment-methods', cat.listMethods, ''],
   ['POST', '/payment-methods', cat.createMethod, 'users'],
@@ -105,6 +108,15 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/audit', rep.auditLog, 'users'],
 ];
 
+/** People who work in the businesses this user can see (for "recorded by" filters). Names only. */
+async function staffList(ctx: Ctx) {
+  const scope = ctx.user.businesses;
+  if (!scope.length) return [];
+  return all(ctx.db, `SELECT u.id, u.full_name FROM users u WHERE u.role = 'owner'
+    OR EXISTS (SELECT 1 FROM user_businesses ub WHERE ub.user_id = u.id AND ub.business_id IN (${scope.map(() => '?').join(',')}))
+    ORDER BY u.full_name`, ...scope);
+}
+
 async function bootstrap(ctx: Ctx) {
   const [businesses, methods] = await Promise.all([
     all(ctx.db, `SELECT * FROM businesses WHERE id IN (${ctx.user.businesses.map(() => '?').join(',') || "''"}) ORDER BY sort`, ...ctx.user.businesses),
@@ -143,7 +155,17 @@ async function handle(request: Request, db: D1Database): Promise<Response> {
   try {
     // Mutations must come from our own page: a cross-site form or script cannot set this header.
     if (method !== 'GET' && request.headers.get('X-Requested-With') !== 'meecaad') throw new HttpError(403, 'Request blocked');
-    const body = method === 'GET' ? {} : await request.json().catch(() => ({}));
+    // …and from our own address (a browser always sends Origin on these requests).
+    const origin = request.headers.get('Origin');
+    if (method !== 'GET' && origin && origin !== url.origin) throw new HttpError(403, 'Request blocked');
+    if (!['GET', 'POST', 'PATCH'].includes(method)) throw new HttpError(405, 'Not allowed');
+    // Pictures are the largest thing ever sent (resized in the browser first).
+    if (Number(request.headers.get('Content-Length') ?? 0) > 3_000_000) throw new HttpError(413, 'This is too large to send');
+    const raw = method === 'GET' ? '' : await request.text();
+    if (raw.length > 3_000_000) throw new HttpError(413, 'This is too large to send');
+    let body: any = {};
+    if (raw) { try { body = JSON.parse(raw); } catch { throw new HttpError(400, 'Invalid request'); } }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Invalid request');
     if (!db) throw new HttpError(503, 'The database is not connected yet. Put your D1 database ID in wrangler.toml (see docs/SETUP_FROM_PHONE.md) and redeploy.');
     await ensureSchema(db);
 

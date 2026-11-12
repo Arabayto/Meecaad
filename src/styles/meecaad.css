@@ -177,3 +177,11 @@
   .module-header { flex-wrap: wrap; }
   .module-header__actions { width: 100%; flex-wrap: wrap; }
 }
+
+/* Search + filter row above a list */
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.filter-bar__search { flex: 1 1 220px; max-width: 320px; }
+.filter-bar__select { width: auto; flex: 0 1 190px; min-width: 140px; }
+@media (max-width: 640px) {
+  .filter-bar__search, .filter-bar__select { flex: 1 1 100%; max-width: none; }
+}

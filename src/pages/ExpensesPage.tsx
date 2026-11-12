@@ -3,14 +3,14 @@ import { Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
-import { DateRange, ErrorBox, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, fmtTime, addDays, useFilters, useLoad, useSubmit } from '../components/ui';
 
 interface Row { category: string; description: string; amount: string; method: string; supplier: string }
 
 const CATEGORIES = ['Salaries', 'Rent', 'Electricity', 'Water', 'Generator fuel', 'Transport', 'Repairs', 'Gas / cooking fuel', 'Cleaning', 'Phone & internet', 'Taxes & licences', 'Other'];
 
 export function ExpensesPage() {
-  const { business, businessName, today, can, activeMethods } = useAuth();
+  const { business, businessName, today, can, activeMethods, user } = useAuth();
   const [from, setFrom] = useState(today.slice(0, 8) + '01');
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/expenses', { business, from, to }), [business, from, to]);
@@ -39,7 +39,13 @@ export function ExpensesPage() {
     if (r) { setLines([blank(lines[0]?.method), blank(lines[0]?.method)]); list.reload(); }
   };
 
-  const rows = (list.data ?? []).filter((e: any) => e.status === 'completed');
+  const filter = useFilters<any>(list.data ?? [], [
+    { key: 'by', label: 'Recorded by', get: (e) => e.created_by_name },
+    { key: 'cat', label: 'Category', get: (e) => e.category },
+    { key: 'method', label: 'Paid with', get: (e) => e.method_name ?? 'Owed' },
+    { key: 'status', label: 'Status', get: (e) => (e.status === 'voided' ? 'Cancelled' : 'Recorded') },
+  ], (e) => `${e.category} ${e.description ?? ''} ${e.created_by_name} ${e.supplier_name ?? ''}`, 'Search category, details, person');
+  const rows = filter.shown.filter((e: any) => e.status === 'completed');
   const byCat = Object.entries(rows.reduce((acc: Record<string, number>, e: any) => ({ ...acc, [e.category]: (acc[e.category] ?? 0) + e.amount }), {}))
     .sort((a, b) => (b[1] as number) - (a[1] as number));
   const total = rows.reduce((s: number, e: any) => s + e.amount, 0);
@@ -49,7 +55,7 @@ export function ExpensesPage() {
       <PageHeader icon={<ShoppingBag size={22} />} title={`Expenses — ${businessName(business)}`} subtitle="Running costs of the business (not stock for sale)" />
       <div className="panel">
         <div className="panel__header">
-          <div><p>New</p><h2>Record expenses</h2></div>
+          <div><p>New · recorded by <strong>{user?.full_name}</strong></p><h2>Record expenses</h2></div>
           <input type="date" className="form-input date-input" value={date} max={today} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
         </div>
         <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
@@ -87,7 +93,7 @@ export function ExpensesPage() {
         </div>
       </div>
       <div className="panel">
-        <div className="panel__header"><div><p>This period</p><h2>{money(total)} spent</h2></div></div>
+        <div className="panel__header"><div><p>{filter.active ? 'Filtered' : 'This period'}</p><h2>{money(total)} spent</h2></div></div>
         <div className="kv" style={{ maxWidth: 480 }}>
           {byCat.map(([c, v]) => <Fragment key={c}><span>{c}</span><span>{money(v as number)}</span></Fragment>)}
           {!byCat.length && <span className="muted">No expenses yet.</span>}
@@ -97,23 +103,24 @@ export function ExpensesPage() {
       <div className="panel">
         <div className="panel__header"><div><p>History</p><h2>Expenses</h2></div><DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} /></div>
         <ErrorBox error={list.error} />
+        {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Category</th><th>Details</th><th className="num">Amount</th><th>Paid with</th><th>Status</th><th>By</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Category</th><th>Details</th><th className="num">Amount</th><th>Paid with</th><th>Status</th><th>Recorded by</th><th></th></tr></thead>
             <tbody>
-              {(list.data ?? []).map((e: any) => (
+              {filter.shown.map((e: any) => (
                 <tr key={e.id}>
-                  <td className="small">{e.entry_date}</td>
+                  <td className="small">{e.entry_date}<div className="muted">{fmtTime(e.created_at)}</div></td>
                   <td>{e.category}</td>
                   <td className="small">{e.description}</td>
                   <td className="num"><Money c={e.amount} /></td>
                   <td className="small">{e.method_name ?? `Owed to ${e.supplier_name}`}</td>
                   <td>{e.status === 'voided' ? <><StatusBadge label="Cancelled" tone="red" /><div className="small muted">{e.void_reason}</div></> : <StatusBadge label="Recorded" tone="green" />}</td>
-                  <td className="small muted">{e.created_by_name}</td>
+                  <td className="small"><strong>{e.created_by_name}</strong></td>
                   <td>{can('void') && e.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(e)}>Cancel</button>}</td>
                 </tr>
               ))}
-              {!list.loading && !list.data?.length && <tr><td colSpan={8} className="muted">Nothing in this period.</td></tr>}
+              {!list.loading && !filter.shown.length && <tr><td colSpan={8} className="muted">{filter.active ? 'Nothing matches.' : 'Nothing in this period.'}</td></tr>}
             </tbody>
           </table>
         </div>

@@ -44,7 +44,7 @@ const dayStr = (today, back) => new Date(Date.parse(today + 'T00:00:00Z') - back
 
 async function main() {
   for (let i = 0; i < 120; i++) { try { await fetch(`${BASE}/auth/me`); break; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  await post('/auth/setup', { fullName: 'Owner', username: 'owner', password: 'owner-pass-1' });
+  await post('/auth/setup', { fullName: 'Owner', username: 'owner', password: 'Meec-test-41' });
   const { today } = await get('/bootstrap');
   const start = dayStr(today, DAYS);
   const t0 = Date.now();

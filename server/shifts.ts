@@ -69,7 +69,8 @@ async function openShift(db: D1Database, business: string, userId: string) {
  * shift from an earlier day must be closed first.
  */
 export async function assertShiftCurrent(ctx: Ctx, business: string) {
-  if (!SHIFT_BUSINESSES.includes(business)) return;
+  // The owner's money is not drawer money: the owner has no shift.
+  if (!SHIFT_BUSINESSES.includes(business) || ctx.user.owner) return;
   const from = await shiftStart(ctx.db, business, ctx.user.id);
   // Judged by when the work was done, not the date on the record: entering yesterday's forgotten bill today is fine.
   const old = await first<{ t: string | null }>(ctx.db, `SELECT MIN(created_at) AS t FROM journal_entries
@@ -98,6 +99,7 @@ async function unpaidOrders(db: D1Database, business: string) {
 export async function myShift(ctx: Ctx) {
   const business = shiftBusiness(ctx.url.searchParams.get('business'));
   requireBiz(ctx, business, 'sell');
+  if (ctx.user.owner) return { owner: true };
   const [shift, unpaid, people, recent] = await Promise.all([
     openShift(ctx.db, business, ctx.user.id), unpaidOrders(ctx.db, business), receivers(ctx.db, business),
     all(ctx.db, `SELECT s.*, h.full_name AS handed_to_name FROM shift_closings s JOIN users h ON h.id = s.handed_to
@@ -110,6 +112,7 @@ export async function closeShift(ctx: Ctx) {
   const b = ctx.body;
   const business = shiftBusiness(b.business);
   requireBiz(ctx, business, 'sell');
+  if (ctx.user.owner) throw bad('The owner does not close shifts');
   const shift = await openShift(ctx.db, business, ctx.user.id);
   if (!shift.activity) throw bad('Nothing to close: you have not recorded any money since your last closing');
   const people = await receivers(ctx.db, business);
@@ -200,8 +203,8 @@ export async function reopenShift(ctx: Ctx) {
 export async function openShifts(ctx: Ctx) {
   const business = shiftBusiness(ctx.url.searchParams.get('business'));
   requireBiz(ctx, business, 'reports');
-  const people = await all<any>(ctx.db, `SELECT u.id, u.full_name FROM users u WHERE u.active = 1
-    AND (u.role = 'owner' OR EXISTS (SELECT 1 FROM user_businesses ub WHERE ub.user_id = u.id AND ub.business_id = ?))`, business);
+  const people = await all<any>(ctx.db, `SELECT u.id, u.full_name FROM users u WHERE u.active = 1 AND u.role <> 'owner'
+    AND EXISTS (SELECT 1 FROM user_businesses ub WHERE ub.user_id = u.id AND ub.business_id = ?)`, business);
   const out = [];
   for (const p of people) {
     const s = await openShift(ctx.db, business, p.id);

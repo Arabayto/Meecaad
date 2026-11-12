@@ -151,6 +151,42 @@ export function DateRange({ from, to, onChange }: { from: string; to: string; on
   );
 }
 
+/** One filter: a dropdown whose choices come from the rows on screen (e.g. "Recorded by"). */
+export interface FilterDef<T> { key: string; label: string; get: (row: T) => string | null | undefined }
+
+/**
+ * Search and filters for a list already on screen: instant, no extra database reads.
+ * `text` returns what the search box looks in; leave it out for no search box.
+ */
+export function useFilters<T>(rows: T[], defs: FilterDef<T>[], text?: (row: T) => string, placeholder = 'Search') {
+  const [q, setQ] = useState('');
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter((r) => (!needle || !text || text(r).toLowerCase().includes(needle))
+    && defs.every((d) => !sel[d.key] || (d.get(r) ?? '') === sel[d.key]));
+  const active = Boolean(needle) || defs.some((d) => sel[d.key]);
+  const bar = (
+    <div className="filter-bar">
+      {text && <input className="form-input filter-bar__search" type="search" placeholder={placeholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />}
+      {defs.map((d) => {
+        const options = [...new Set(rows.map((r) => d.get(r)).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
+        if (options.length < 2 && !sel[d.key]) return null;
+        return (
+          <select key={d.key} className="form-select filter-bar__select" value={sel[d.key] ?? ''} onChange={(e) => setSel({ ...sel, [d.key]: e.target.value })} aria-label={d.label}>
+            <option value="">{d.label}: all</option>
+            {options.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        );
+      })}
+      {active && <>
+        <span className="small muted">{shown.length} of {rows.length}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setQ(''); setSel({}); }}>Clear</button>
+      </>}
+    </div>
+  );
+  return { shown, bar, active };
+}
+
 export const addDays = (date: string, days: number) =>
   new Date(Date.parse(date + 'T00:00:00Z') + days * 86_400_000).toISOString().slice(0, 10);
 

@@ -64,10 +64,10 @@ function Need({ perms, children }: { perms: Perm[]; children: JSX.Element }) {
 
 /** A portal's landing page: its dashboard, or the first page this user can use there. */
 function PortalHome() {
-  const { can, portal, path } = useAuth();
+  const { can, portal, path, user } = useAuth();
   if (portal === 'restaurant' && can('reports')) return <RestaurantDashboard />;
   if (portal === 'admin' || can('reports')) return <DashboardPage />;
-  const first = visibleNav(portal!, can).find((n) => n.path !== '/');
+  const first = visibleNav(portal!, can, Boolean(user?.owner)).find((n) => n.path !== '/');
   return first ? <Navigate to={path(first.path)} replace /> : <div className="mc-note">Your account has no pages in this portal. Ask the owner.</div>;
 }
 

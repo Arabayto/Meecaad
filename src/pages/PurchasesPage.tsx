@@ -3,7 +3,7 @@ import { Plus, Trash2, Truck } from 'lucide-react';
 import { get, money, num, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
-import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
 interface Line { product: string; tank: string; qty: string; total: string }
 const blank = (): Line => ({ product: '', tank: '', qty: '', total: '' });
@@ -17,6 +17,11 @@ export function PurchasesPage() {
   const [from, setFrom] = useState(addDays(today, -30));
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/purchases', { business, from, to }), [business, from, to]);
+  const filter = useFilters<any>(list.data ?? [], [
+    { key: 'by', label: 'Recorded by', get: (p) => p.created_by_name },
+    { key: 'sup', label: 'Supplier', get: (p) => p.supplier_name ?? 'No supplier' },
+    { key: 'status', label: 'Status', get: (p) => (p.status === 'voided' ? 'Cancelled' : p.total - p.paid_amount > 0 ? 'Owed' : 'Paid') },
+  ], (p) => `${p.number} ${p.supplier_name ?? ''} ${p.items_text ?? ''} ${p.created_by_name}`, 'Search #, supplier, item');
   const [supplier, setSupplier] = useState('');
   const [invoiceRef, setInvoiceRef] = useState('');
   const [date, setDate] = useState(today);
@@ -104,14 +109,15 @@ export function PurchasesPage() {
       <div className="panel">
         <div className="panel__header"><div><p>History</p><h2>{isFuel ? 'Deliveries' : 'Purchases'}</h2></div><DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} /></div>
         <ErrorBox error={list.error} />
+        {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Date</th><th>Supplier</th><th>Items</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Owed</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Date</th><th>Supplier</th><th>Items</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Owed</th><th>Status</th><th>Recorded by</th><th></th></tr></thead>
             <tbody>
-              {(list.data ?? []).map((p: any) => (
+              {filter.shown.map((p: any) => (
                 <tr key={p.id}>
                   <td>{p.number}</td>
-                  <td className="small">{p.entry_date}<div className="muted">{p.created_by_name}</div></td>
+                  <td className="small">{p.entry_date}<div className="muted">{fmtTime(p.created_at)}</div></td>
                   <td>{p.supplier_name ?? '—'}{p.invoice_ref && <div className="small muted">Inv {p.invoice_ref}</div>}</td>
                   <td className="small">{p.items_text}</td>
                   <td className="num"><Money c={p.total} /></td>
@@ -119,10 +125,11 @@ export function PurchasesPage() {
                   <td className="num">{money(p.total - p.paid_amount)}</td>
                   <td>{p.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : <StatusBadge label="Received" tone="green" />}
                     {p.void_reason && <div className="small muted">{p.void_reason}</div>}</td>
+                  <td className="small"><strong>{p.created_by_name}</strong></td>
                   <td>{can('void') && p.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(p)}>Cancel</button>}</td>
                 </tr>
               ))}
-              {!list.loading && !list.data?.length && <tr><td colSpan={9} className="muted">Nothing in this period.</td></tr>}
+              {!list.loading && !filter.shown.length && <tr><td colSpan={10} className="muted">{filter.active ? 'Nothing matches.' : 'Nothing in this period.'}</td></tr>}
             </tbody>
           </table>
         </div>

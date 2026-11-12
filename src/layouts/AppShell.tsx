@@ -8,7 +8,7 @@ import { useAuth, PORTALS, ROLE_LABELS, type Perm, type PortalId } from '../cont
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useRefreshing } from '../components/ui';
 
-export interface NavItem { label: string; path: string; icon: typeof Home; perms: Perm[] }
+export interface NavItem { label: string; path: string; icon: typeof Home; perms: Perm[]; notOwner?: boolean }
 
 /** Each portal has its own navigation. Items show when the user holds any of `perms` in that business. */
 export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
@@ -17,7 +17,7 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'New Order', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
     { label: 'Orders', path: '/order-list', icon: ClipboardList, perms: ['sell'] },
-    { label: 'Close My Shift', path: '/shift', icon: Wallet, perms: ['sell'] },
+    { label: 'Close My Shift', path: '/shift', icon: Wallet, perms: ['sell'], notOwner: true },   // the owner has no shift
     { label: 'Sales History', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
     { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
@@ -64,8 +64,8 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
 
 export const PORTAL_ICON: Record<PortalId, typeof Home> = { restaurant: Coffee, store: Store, fuel: Fuel, admin: Settings };
 
-export function visibleNav(portal: PortalId, can: (p: Perm) => boolean) {
-  return PORTAL_NAV[portal].filter((n) => n.perms.some(can));
+export function visibleNav(portal: PortalId, can: (p: Perm) => boolean, owner = false) {
+  return PORTAL_NAV[portal].filter((n) => n.perms.some(can) && !(owner && n.notOwner));
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -75,7 +75,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const refreshing = useRefreshing();
   const id = portal!;
-  const items = visibleNav(id, can);
+  const items = visibleNav(id, can, Boolean(user?.owner));
   const rel = location.pathname.slice(id.length + 1) || '/';
   const current = PORTAL_NAV[id].find((n) => (n.path === '/' ? rel === '/' : rel === n.path || rel.startsWith(n.path + '/')));
   const Icon = PORTAL_ICON[id];

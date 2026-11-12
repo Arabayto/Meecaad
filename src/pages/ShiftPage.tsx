@@ -57,7 +57,8 @@ export function ShiftPage() {
       <PageHeader icon={<Wallet size={22} />} title="Close my shift" subtitle={`${user?.full_name} · count the money you took and hand it over`} />
       <ErrorBox error={s.error} />
       {!d && !s.error && <PageSkeleton />}
-      {d && (d.activity ? (
+      {d?.owner && <div className="panel"><p className="muted">The owner does not close shifts. Your money is not drawer money. See every person's shift under Closings.</p></div>}
+      {d && !d.owner && (d.activity ? (
         <>
           {d.mustClose && <div className="mc-error">Your shift from {d.firstDate} is still open. Close it now — you cannot take payments or pay expenses until it is closed.</div>}
           <section className="stat-grid">

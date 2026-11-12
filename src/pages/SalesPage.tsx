@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
-import { DateRange, ErrorBox, Field, Money, PageHeader, ReasonModal, addDays, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Field, Money, PageHeader, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
 export function SalesPage() {
   const { business, businessName, today, can } = useAuth();
@@ -18,7 +18,13 @@ export function SalesPage() {
   const [returning, setReturning] = useState(false);
 
   const show = async (id: string) => setOpen(await get(`/sales/${id}`));
-  const rows = sales.data ?? [];
+  const filter = useFilters<any>(sales.data ?? [], [
+    { key: 'by', label: 'Sold by', get: (s) => s.created_by_name },
+    { key: 'status', label: 'Status', get: (s) => (s.status === 'voided' ? 'Cancelled' : s.returned_amount > 0 ? 'Part returned' : 'Completed') },
+    { key: 'pay', label: 'Payment', get: (s) => (s.credit_amount && !s.payments_text ? 'On credit' : s.credit_amount ? 'Part credit' : s.payments_text?.includes(',') ? 'Split' : s.payments_text?.split(' ')[0]) },
+    { key: 'cust', label: 'Customer', get: (s) => s.customer_name ?? 'Walk-in' },
+  ]);
+  const rows = filter.shown;
   const completed = rows.filter((s: any) => s.status === 'completed');
   const totals = {
     count: completed.length,
@@ -36,9 +42,10 @@ export function SalesPage() {
           <input className="form-input" style={{ maxWidth: 260 }} placeholder="Search receipt #, item, customer" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <ErrorBox error={sales.error} />
+        {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Time</th><th>Customer</th><th className="num">Total</th><th>Paid with</th><th className="num">On credit</th><th>Status</th><th>By</th></tr></thead>
+            <thead><tr><th>#</th><th>Time</th><th>Customer</th><th className="num">Total</th><th>Paid with</th><th className="num">On credit</th><th>Status</th><th>Sold by</th></tr></thead>
             <tbody>
               {rows.map((s: any) => (
                 <tr key={s.id} className="tr--clickable" onClick={() => show(s.id)}>
@@ -49,7 +56,7 @@ export function SalesPage() {
                   <td className="small">{s.payments_text ?? '—'}</td>
                   <td className="num">{s.credit_amount ? money(s.credit_amount) : '—'}</td>
                   <td>{s.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : s.returned_amount > 0 ? <StatusBadge label="Part returned" tone="yellow" /> : <StatusBadge label="Completed" tone="green" />}</td>
-                  <td className="small muted">{s.created_by_name}</td>
+                  <td className="small"><strong>{s.created_by_name}</strong></td>
                 </tr>
               ))}
               {!sales.loading && !rows.length && <tr><td colSpan={8} className="muted">No sales in this period.</td></tr>}

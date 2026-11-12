@@ -5,7 +5,10 @@
 import { BUSINESSES, HttpError, Tx, all, bad, bool, first, newId, nowIso, str, type BizRole, type Ctx, type Role, type User } from './lib';
 
 const COOKIE = 'mc_session';
-const SESSION_DAYS = 7;
+const SESSION_DAYS = 7;                    // a session ends after 7 days at most…
+const IDLE_HOURS = 12;                     // …or after 12 hours without use
+const TOUCH_MINUTES = 10;                  // how often "last used" is written (keeps writes low)
+const IP_FAILS = 20;                       // failed sign-ins from one address in 15 minutes before it is slowed down
 const ITERATIONS = 100_000;
 const BIZ_ROLES: BizRole[] = ['manager', 'cashier', 'staff'];
 
@@ -37,12 +40,21 @@ async function sha256(text: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function validPassword(v: unknown) {
+const COMMON = new Set(['password', 'password1', 'password123', '12345678', '123456789', '1234567890', '87654321', 'qwerty123', 'qwertyuiop',
+  'abc12345', 'iloveyou', '11111111', '00000000', 'admin123', 'welcome1', 'letmein1', 'meecaad1', 'meecaad123', 'somalia1', 'hargeisa1']);
+
+/** At least 8 characters with letters and numbers; not the username and not a well-known password. */
+export function validPassword(v: unknown, username?: string | null) {
   const p = String(v ?? '');
   if (p.length < 8) throw bad('Password must be at least 8 characters');
   if (p.length > 200) throw bad('Password is too long');
+  if (!/[a-zA-Z]/.test(p) || !/[0-9]/.test(p)) throw bad('Password must contain both letters and numbers');
+  if (COMMON.has(p.toLowerCase())) throw bad('This password is too easy to guess. Choose another one.');
+  if (username && p.toLowerCase().includes(username.toLowerCase())) throw bad('The password must not contain the username');
   return p;
 }
+
+const clientIp = (req: Request) => req.headers.get('CF-Connecting-IP') ?? req.headers.get('X-Forwarded-For')?.split(',')[0].trim() ?? 'local';
 
 async function loadUser(db: D1Database, id: string): Promise<User | null> {
   const u = await first<any>(db, 'SELECT id, username, full_name, role FROM users WHERE id = ? AND active = 1', id);
@@ -56,8 +68,17 @@ async function loadUser(db: D1Database, id: string): Promise<User | null> {
 export async function userFromRequest(db: D1Database, req: Request): Promise<User | null> {
   const token = (req.headers.get('Cookie') ?? '').split(/;\s*/).find((c) => c.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
   if (!token) return null;
-  const session = await first<{ user_id: string }>(db, 'SELECT user_id FROM sessions WHERE id = ? AND expires_at > ?', await sha256(token), nowIso());
-  return session ? loadUser(db, session.user_id) : null;
+  const id = await sha256(token);
+  const now = Date.now();
+  const session = await first<{ user_id: string; last_seen_at: string | null }>(db, 'SELECT user_id, last_seen_at FROM sessions WHERE id = ? AND expires_at > ?', id, nowIso());
+  if (!session) return null;
+  const seen = Date.parse(session.last_seen_at ?? '') || 0;
+  if (now - seen > IDLE_HOURS * 3600_000) {
+    await db.prepare('DELETE FROM sessions WHERE id = ?').bind(id).run();
+    return null;
+  }
+  if (now - seen > TOUCH_MINUTES * 60_000) await db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(nowIso(), id).run();
+  return loadUser(db, session.user_id);
 }
 
 function cookie(req: Request, token: string, maxAge: number) {
@@ -71,7 +92,9 @@ async function startSession(db: D1Database, req: Request, userId: string) {
   const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000).toISOString();
   await db.batch([
     db.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(nowIso()),
-    db.prepare('INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?,?,?,?)').bind(await sha256(token), userId, expires, nowIso()),
+    db.prepare('INSERT INTO sessions (id, user_id, expires_at, created_at, last_seen_at, ip, user_agent) VALUES (?,?,?,?,?,?,?)')
+      .bind(await sha256(token), userId, expires, nowIso(), nowIso(), clientIp(req), (req.headers.get('User-Agent') ?? '').slice(0, 200)),
+    db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(nowIso(), userId),
   ]);
   return cookie(req, token, SESSION_DAYS * 86_400);
 }
@@ -93,29 +116,48 @@ export async function setup(db: D1Database, req: Request, body: any) {
   const username = str(body.username, 'Username', { required: true, max: 60 })!;
   const fullName = str(body.fullName, 'Full name', { required: true, max: 120 })!;
   await db.batch([
-    db.prepare(`INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?,?,?,'owner',?,?)`)
-      .bind(id, username, fullName, await hashPassword(validPassword(body.password)), nowIso()),
+    db.prepare(`INSERT INTO users (id, username, full_name, role, password_hash, created_at, password_changed_at) VALUES (?,?,?,'owner',?,?,?)`)
+      .bind(id, username, fullName, await hashPassword(validPassword(body.password, username)), nowIso(), nowIso()),
     db.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, created_at) VALUES (?, 'setup', 'user', ?, ?)`).bind(id, id, nowIso()),
   ]);
   return json({ user: await loadUser(db, id) }, { 'Set-Cookie': await startSession(db, req, id) });
 }
 
 export async function login(db: D1Database, req: Request, body: any) {
-  const username = String(body.username ?? '').trim();
+  const username = String(body.username ?? '').trim().slice(0, 60);
+  const password = String(body.password ?? '').slice(0, 200);
+  const ip = clientIp(req);
+  const since = new Date(Date.now() - 15 * 60_000).toISOString();
+  // One address trying many passwords (or many usernames) is slowed down.
+  const recent = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ? AND created_at > ? AND ok = 0', ip, since);
+  if ((recent?.n ?? 0) >= IP_FAILS) throw new HttpError(429, 'Too many wrong attempts from this device. Try again in 15 minutes.');
+  const attempt = (ok: 0 | 1) => db.prepare('INSERT INTO login_attempts (ip, username, ok, created_at) VALUES (?,?,?,?)').bind(ip, username, ok, nowIso());
   const u = await first<any>(db, 'SELECT * FROM users WHERE username = ?', username);
   const fail = () => new HttpError(401, 'Wrong username or password');
   if (!u || !u.active) {
-    await verifyPassword(String(body.password ?? ''), 'pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    await verifyPassword(password, 'pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    await attempt(0).run();
     throw fail();
   }
   if (u.locked_until && u.locked_until > nowIso()) throw new HttpError(429, 'Too many wrong attempts. Try again in 15 minutes.');
-  if (!(await verifyPassword(String(body.password ?? ''), u.password_hash))) {
+  if (!(await verifyPassword(password, u.password_hash))) {
     const failed = u.failed_logins + 1;
     const lock = failed >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null;
-    await db.prepare('UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?').bind(lock ? 0 : failed, lock, u.id).run();
+    await db.batch([
+      db.prepare('UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?').bind(lock ? 0 : failed, lock, u.id),
+      attempt(0),
+      ...(lock ? [db.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, details, created_at) VALUES (?, 'account_locked', 'user', ?, ?, ?)`)
+        .bind(u.id, u.id, JSON.stringify({ ip, reason: '5 wrong passwords' }), nowIso())] : []),
+    ]);
     throw fail();
   }
-  await db.prepare('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?').bind(u.id).run();
+  await db.batch([
+    db.prepare('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?').bind(u.id),
+    attempt(1),
+    db.prepare('DELETE FROM login_attempts WHERE created_at < ?').bind(new Date(Date.now() - 30 * 86_400_000).toISOString()),
+    db.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, details, created_at) VALUES (?, 'sign_in', 'user', ?, ?, ?)`)
+      .bind(u.id, u.id, JSON.stringify({ ip }), nowIso()),
+  ]);
   return json({ user: await loadUser(db, u.id) }, { 'Set-Cookie': await startSession(db, req, u.id) });
 }
 
@@ -146,11 +188,17 @@ function summaryRole(owner: boolean, a: [string, BizRole][]): Role {
 }
 
 export async function listUsers(ctx: Ctx) {
-  const users = await all<any>(ctx.db, `SELECT id, username, full_name, phone, role, active, created_at FROM users ORDER BY active DESC, full_name`);
-  const links = await all<any>(ctx.db, 'SELECT user_id, business_id, role FROM user_businesses');
+  const [users, links, sessions] = await Promise.all([
+    all<any>(ctx.db, `SELECT id, username, full_name, phone, role, active, created_at, last_login_at, password_changed_at,
+                        CASE WHEN locked_until > ? THEN locked_until END AS locked_until FROM users ORDER BY active DESC, full_name`, nowIso()),
+    all<any>(ctx.db, 'SELECT user_id, business_id, role FROM user_businesses'),
+    all<any>(ctx.db, 'SELECT user_id, COUNT(*) AS n, MAX(last_seen_at) AS seen FROM sessions WHERE expires_at > ? GROUP BY user_id', nowIso()),
+  ]);
   return users.map((u) => ({
     ...u,
     owner: u.role === 'owner',
+    sessions: sessions.find((x) => x.user_id === u.id)?.n ?? 0,
+    last_seen_at: sessions.find((x) => x.user_id === u.id)?.seen ?? null,
     access: u.role === 'owner' ? {} : Object.fromEntries(links.filter((l) => l.user_id === u.id).map((l) => [l.business_id, l.role])),
   }));
 }
@@ -160,10 +208,13 @@ export async function createUser(ctx: Ctx) {
   const owner = bool(b.owner);
   const a = access(owner, b.access);
   const id = newId();
+  const username = str(b.username, 'Username', { required: true, max: 60 })!;
+  if (!/^[a-zA-Z0-9._-]{3,60}$/.test(username)) throw bad('Username: at least 3 letters or numbers (no spaces)');
+  if (await first(ctx.db, 'SELECT id FROM users WHERE username = ?', username)) throw new HttpError(409, 'This username is already taken');
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`INSERT INTO users (id, username, full_name, phone, role, password_hash, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)`,
-    id, str(b.username, 'Username', { required: true, max: 60 }), str(b.fullName, 'Full name', { required: true, max: 120 }),
-    str(b.phone, 'Phone', { max: 40 }), summaryRole(owner, a), await hashPassword(validPassword(b.password)), nowIso(), ctx.user.id);
+  tx.run(`INSERT INTO users (id, username, full_name, phone, role, password_hash, created_at, created_by, password_changed_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+    id, username, str(b.fullName, 'Full name', { required: true, max: 120 }),
+    str(b.phone, 'Phone', { max: 40 }), summaryRole(owner, a), await hashPassword(validPassword(b.password, username)), nowIso(), ctx.user.id, nowIso());
   for (const [biz, r] of a) tx.run('INSERT INTO user_businesses (user_id, business_id, role) VALUES (?,?,?)', id, biz, r);
   tx.audit('create', 'user', id, null, { username: b.username, owner, access: Object.fromEntries(a) });
   return tx.commit(null, { id });
@@ -179,6 +230,10 @@ export async function updateUser(ctx: Ctx) {
   const a = access(owner, b.access ?? Object.fromEntries(before.map((l) => [l.business_id, l.role])));
   const active = b.active === undefined ? existing.active : bool(b.active) ? 1 : 0;
   if (id === ctx.user.id && (!owner || !active)) throw bad('You cannot remove your own owner access');
+  if (existing.role === 'owner' && (!owner || !active)) {
+    const owners = await first<{ n: number }>(ctx.db, `SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND active = 1 AND id <> ?`, id);
+    if (!owners?.n) throw bad('There must always be at least one active owner');
+  }
   const changedAccess = JSON.stringify(Object.fromEntries(a)) !== JSON.stringify(Object.fromEntries(before.map((l) => [l.business_id, l.role]))) || owner !== (existing.role === 'owner');
   const tx = new Tx(ctx.db, ctx.user);
   tx.run('UPDATE users SET full_name = ?, phone = ?, role = ?, active = ? WHERE id = ?',
@@ -186,8 +241,10 @@ export async function updateUser(ctx: Ctx) {
   tx.run('DELETE FROM user_businesses WHERE user_id = ?', id);
   for (const [biz, r] of a) tx.run('INSERT INTO user_businesses (user_id, business_id, role) VALUES (?,?,?)', id, biz, r);
   if (b.password) {
-    tx.run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', await hashPassword(validPassword(b.password)), id);
+    tx.run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL, password_changed_at = ? WHERE id = ?',
+      await hashPassword(validPassword(b.password, existing.username)), nowIso(), id);
   }
+  if (b.unlock) tx.run('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?', id);
   if (b.password || !active || changedAccess) tx.run('DELETE FROM sessions WHERE user_id = ?', id);
   tx.audit('update', 'user', id, null, { owner, access: Object.fromEntries(a), active, passwordReset: Boolean(b.password) });
   return tx.commit(null, { id });
@@ -195,9 +252,36 @@ export async function updateUser(ctx: Ctx) {
 
 export async function changeOwnPassword(ctx: Ctx) {
   const u = await first<any>(ctx.db, 'SELECT password_hash FROM users WHERE id = ?', ctx.user.id);
-  if (!(await verifyPassword(String(ctx.body.currentPassword ?? ''), u.password_hash))) throw bad('Current password is wrong');
+  if (!(await verifyPassword(String(ctx.body.currentPassword ?? '').slice(0, 200), u.password_hash))) throw bad('Current password is wrong');
+  const next = validPassword(ctx.body.newPassword, ctx.user.username);
+  if (next === String(ctx.body.currentPassword)) throw bad('Choose a new password different from the current one');
+  const current = await sessionId(ctx.req);
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run('UPDATE users SET password_hash = ? WHERE id = ?', await hashPassword(validPassword(ctx.body.newPassword)), ctx.user.id);
+  tx.run('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?', await hashPassword(next), nowIso(), ctx.user.id);
+  // Every other device is signed out; this one stays signed in.
+  tx.run('DELETE FROM sessions WHERE user_id = ? AND id <> ?', ctx.user.id, current ?? '');
   tx.audit('change_password', 'user', ctx.user.id, null);
   return tx.commit(null, { ok: true });
+}
+
+async function sessionId(req: Request) {
+  const token = (req.headers.get('Cookie') ?? '').split(/;\s*/).find((c) => c.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
+  return token ? sha256(token) : null;
+}
+
+/** Owner: sign a person out on every device (e.g. a lost phone). */
+export async function signOutUser(ctx: Ctx) {
+  const u = await first<any>(ctx.db, 'SELECT id FROM users WHERE id = ?', ctx.params.id);
+  if (!u) throw new HttpError(404, 'User not found');
+  const current = await sessionId(ctx.req);
+  const tx = new Tx(ctx.db, ctx.user);
+  tx.run('DELETE FROM sessions WHERE user_id = ? AND id <> ?', u.id, current ?? '');
+  tx.audit('sign_out_everywhere', 'user', u.id, null);
+  return tx.commit(null, { ok: true });
+}
+
+/** Owner: recent sign-ins and failed attempts. */
+export async function signInLog(ctx: Ctx) {
+  return all(ctx.db, `SELECT a.id, a.ip, a.username, a.ok, a.created_at, u.full_name FROM login_attempts a LEFT JOIN users u ON u.username = a.username
+                      ORDER BY a.created_at DESC LIMIT 200`);
 }

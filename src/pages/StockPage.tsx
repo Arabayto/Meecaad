@@ -6,7 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { Tabs } from '../components/Tabs';
-import { ErrorBox, Field, Money, MoneyInput, PageHeader, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { ErrorBox, Field, Money, MoneyInput, PageHeader, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 import { ItemPicture } from './RestaurantPage';
 
 /** Crop a photo to a square and shrink it to 320 px in the browser (WebP, or JPEG where WebP is not supported). */
@@ -48,6 +48,10 @@ export function StockPage({ view }: { view: CatalogView }) {
   const [search, setSearch] = useState('');
   const products = useLoad(() => get('/products', { business, stats: '1' }), [business]);
   const moves = useLoad(() => (tab === 'history' ? get('/stock/movements', { business }) : Promise.resolve(null)), [business, tab]);
+  const moveFilter = useFilters<any>(moves.data ?? [], [
+    { key: 'what', label: 'What', get: (m) => MOVE_LABEL[m.type] ?? m.type },
+    { key: 'by', label: 'Recorded by', get: (m) => m.created_by_name },
+  ], (m) => `${m.product_name} ${m.reason ?? ''} ${m.created_by_name}`, 'Search item, reason, person');
   const [edit, setEdit] = useState<any>(null);
   const [adjust, setAdjust] = useState<any>(null);
 
@@ -122,11 +126,11 @@ export function StockPage({ view }: { view: CatalogView }) {
             </div>
           </>
         ) : (
-          <div className="table-wrap">
+          <>{moveFilter.bar}<div className="table-wrap">
             <table>
-              <thead><tr><th>When</th><th>Item</th><th>What</th><th className="num">Qty</th><th className="num">Value</th><th>Reason</th><th>By</th></tr></thead>
+              <thead><tr><th>When</th><th>Item</th><th>What</th><th className="num">Qty</th><th className="num">Value</th><th>Reason</th><th>Recorded by</th></tr></thead>
               <tbody>
-                {(moves.data ?? []).map((m: any) => (
+                {moveFilter.shown.map((m: any) => (
                   <tr key={m.id}>
                     <td className="small">{m.entry_date}<div className="muted">{fmtTime(m.created_at)}</div></td>
                     <td>{m.product_name}{m.tank_name && <div className="small muted">{m.tank_name}</div>}</td>
@@ -134,12 +138,12 @@ export function StockPage({ view }: { view: CatalogView }) {
                     <td className="num" style={{ color: m.qty < 0 ? '#b91c1c' : '#15803d' }}>{m.qty > 0 ? '+' : ''}{num(m.qty)} {m.unit}</td>
                     <td className="num"><Money c={m.value} /></td>
                     <td className="small">{m.reason}</td>
-                    <td className="small muted">{m.created_by_name}</td>
+                    <td className="small"><strong>{m.created_by_name}</strong></td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </div></>
         )}
       </div>
 

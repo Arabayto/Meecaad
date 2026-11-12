@@ -163,7 +163,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
     // Someone still holds money from an earlier day without closing their shift.
     const dayStart = new Date(Date.parse(t + 'T00:00:00Z') - 3 * 3600_000).toISOString();   // start of today, East Africa Time
     for (const r of await all<any>(db, `SELECT u.full_name, MIN(e.created_at) AS since FROM journal_entries e JOIN users u ON u.id = e.created_by
-        WHERE e.business_id = 'restaurant' AND e.created_at < ? AND e.created_at > MAX(COALESCE((SELECT value FROM app_settings WHERE key = 'shifts_since'), ''),
+        WHERE e.business_id = 'restaurant' AND u.role <> 'owner' AND e.created_at < ? AND e.created_at > MAX(COALESCE((SELECT value FROM app_settings WHERE key = 'shifts_since'), ''),
           COALESCE((SELECT MAX(x.to_ts) FROM shift_closings x WHERE x.business_id = 'restaurant' AND x.user_id = e.created_by AND x.status = 'closed'), ''))
           AND e.type NOT IN ('shift_diff', 'shift_reopen', 'transfer', 'transfer_void', 'owner_in', 'owner_in_void', 'owner_out', 'owner_out_void', 'opening_stock')
           AND e.created_at > ?

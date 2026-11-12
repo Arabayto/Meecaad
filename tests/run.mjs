@@ -72,7 +72,7 @@ try {
 
   await step('first run: owner account setup, login, CSRF and auth guards', async () => {
     assert.equal((await owner.get('/auth/me')).setupRequired, true);
-    await owner.post('/auth/setup', { fullName: 'Owner', username: 'owner', password: 'owner-pass-1' });
+    await owner.post('/auth/setup', { fullName: 'Owner', username: 'owner', password: 'Meec-test-41' });
     assert.equal((await owner.call('POST', '/auth/setup', { fullName: 'X', username: 'x', password: 'xxxxxxxx' })).status, 409);
     const anon = client();
     assert.equal((await anon.call('GET', '/dashboard')).status, 401);
@@ -258,9 +258,9 @@ try {
   });
 
   await step('permissions: cashier limited to own business and actions', async () => {
-    await owner.post('/users', { fullName: 'Cashier', username: 'cashier1', password: 'cashier-pass', access: { restaurant: 'cashier' } });
+    await owner.post('/users', { fullName: 'Cashier', username: 'cashier1', password: 'till-pass-7', access: { restaurant: 'cashier' } });
     const c = client();
-    await c.post('/auth/login', { username: 'cashier1', password: 'cashier-pass' });
+    await c.post('/auth/login', { username: 'cashier1', password: 'till-pass-7' });
     assert.equal((await c.call('GET', '/dashboard')).status, 403);
     assert.equal((await c.call('POST', '/sales', { business: 'store', items: [{ product: rice, qty: 1 }], payments: [{ method: 'cash', amount: 2500 }] })).status, 403);
     assert.equal((await c.call('POST', '/expenses', { business: 'store', category: 'x', amount: 100, method: 'cash' })).status, 403);
@@ -385,10 +385,10 @@ try {
 
   await step('restaurant shift closing (xisaab xidh): count, explain, hand over, reopen, earlier-day block, month lock', async () => {
     await owner.post('/users', { fullName: 'Shift Cashier', username: 'shiftc', password: 'shift-pass-1', access: { restaurant: 'cashier' } });
-    await owner.post('/users', { fullName: 'Rest Manager', username: 'rmgr', password: 'rmgr-pass-1', access: { restaurant: 'manager' } });
+    await owner.post('/users', { fullName: 'Rest Manager', username: 'rmgr', password: 'mgr-key-55', access: { restaurant: 'manager' } });
     const c = client(), m = client();
     await c.post('/auth/login', { username: 'shiftc', password: 'shift-pass-1' });
-    await m.post('/auth/login', { username: 'rmgr', password: 'rmgr-pass-1' });
+    await m.post('/auth/login', { username: 'rmgr', password: 'mgr-key-55' });
     const mgrId = (await m.get('/bootstrap')).user.id;
     const cashierId = (await c.get('/bootstrap')).user.id;
     assert.equal((await c.get('/shifts/mine?business=restaurant')).activity, 0);
