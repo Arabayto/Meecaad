@@ -44,6 +44,7 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'Sales', path: '/sales', icon: Fuel, perms: ['fuel', 'reports'] },
     { label: 'Shifts', path: '/shifts', icon: ClipboardCheck, perms: ['fuel', 'reports'] },
+    { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Credit Customers', path: '/customers', icon: UserCheck, perms: ['fuel', 'reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
     { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },

@@ -2,7 +2,7 @@
 //   Sales — open a shift with the fuel it works with (e.g. 2,000 L = $2,000), record every
 //           sale (Cash / Zaad / Edahab or a customer debt), then Xisaab xidh: when the sales
 //           match the opening value the shift is done and the next one opens.
-//   Shifts, Dashboard, Reports, Settings (exchange rate, expenses).
+//   Shifts, Expenses, Dashboard, Reports, Settings (exchange rate).
 import { Fragment, useState } from 'react';
 import { BarChart3, CheckCircle2, ClipboardCheck, Fuel, History, Home, Printer, RefreshCw, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -10,10 +10,8 @@ import { fromCents, get, money, num, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
-import { Tabs } from '../components/Tabs';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { DateRange, ErrorBox, Field, MoneyInput, PageHeader, PartySelect, ReasonModal, Stat, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
-import { ExpensesPage } from './ExpensesPage';
 
 /** "14,280,000 SLSH" for an amount in cents at a rate (SLSH per $1), or null when there is no rate. */
 const slsh = (cents: number, rate: number | null | undefined) => (rate ? `${Math.round((cents / 100) * rate).toLocaleString('en-US')} SLSH` : null);
@@ -423,13 +421,10 @@ export function FuelReports() {
 
 // ── Settings ────────────────────────────────────────────────────
 export function FuelSettings() {
-  const [tab, setTab] = useState('rate');
   return (
     <div className="module-page">
-      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Daily exchange rate and expenses" />
-      <div className="panel" style={{ paddingBottom: 0 }}><Tabs tabs={[{ key: 'rate', label: 'Exchange rate' }, { key: 'expenses', label: 'Expenses' }]} activeTab={tab} onTabChange={setTab} /></div>
-      {tab === 'rate' && <RateSettings />}
-      {tab === 'expenses' && <ExpensesPage />}
+      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Daily exchange rate (USD → Somaliland Shillings)" />
+      <RateSettings />
     </div>
   );
 }
