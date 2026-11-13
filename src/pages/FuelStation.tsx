@@ -155,7 +155,7 @@ function NewSale({ shift, rate, customers, onDone }: { shift: any; rate: number 
   return (
     <div className="panel form-stack">
       <div className="panel__header"><div><p>New</p><h2>Record a sale</h2></div></div>
-      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+      <div className="method-picker">
         {activeMethods.map((m) => <button key={m.id} type="button" className={`btn ${method === m.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick(m.id)}>{m.name}</button>)}
         <button type="button" className={`btn ${method === 'debt' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick('debt')}>Customer debt</button>
       </div>

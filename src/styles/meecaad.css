@@ -185,3 +185,12 @@
 @media (max-width: 640px) {
   .filter-bar__search, .filter-bar__select { flex: 1 1 100%; max-width: none; }
 }
+
+/* "+ New customer / supplier" inside a form: stacked, full width, same everywhere (phone, modal, cart) */
+.party-add { display: grid; gap: 8px; width: 100%; min-width: 0; }
+.party-add > .form-input { width: 100%; min-width: 0; }
+.party-add__buttons { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Payment method buttons on the fuel Sales screen: 2 × 2 on phones, one row on wide screens */
+.method-picker { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+@media (min-width: 700px) { .method-picker { display: flex; flex-wrap: wrap; } }

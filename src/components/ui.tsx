@@ -257,18 +257,25 @@ export function PartySelect({ kind, value, onChange, items, onCreated, placehold
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  // Added here: listed at once, so the new person is selected even before the list has reloaded.
+  const [created, setCreated] = useState<{ id: string; name: string; phone?: string }[]>([]);
   const { run, busy } = useSubmit();
   const save = async () => {
     const r = await run((key) => post(`/${kind}`, { name, phone, business }, key), 'Added');
-    if (r) { onCreated?.(); onChange(r.id); setAdding(false); setName(''); setPhone(''); }
+    if (r) { setCreated((c) => [...c, { id: r.id, name: name.trim(), phone: phone.trim() || undefined }]); onCreated?.(); onChange(r.id); setAdding(false); setName(''); setPhone(''); }
   };
+  const options = [...items, ...created.filter((c) => !items.some((i) => i.id === c.id))];
   if (adding) {
     return (
-      <div className="pay-line">
-        <input className="form-input" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        <input className="form-input" placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy || !name.trim()} onClick={save}>Add</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdding(false)}>✕</button>
+      <div className="party-add">
+        <input className="form-input" placeholder={kind === 'customers' ? 'Customer name' : 'Supplier name'} value={name} onChange={(e) => setName(e.target.value)} autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter' && name.trim() && !busy) save(); }} />
+        <input className="form-input" placeholder="Phone (optional)" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && name.trim() && !busy) save(); }} />
+        <div className="party-add__buttons">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAdding(false)}>Cancel</button>
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy || !name.trim()} onClick={save}>Add {kind === 'customers' ? 'customer' : 'supplier'}</button>
+        </div>
       </div>
     );
   }
@@ -276,7 +283,7 @@ export function PartySelect({ kind, value, onChange, items, onCreated, placehold
     <div className="pay-line">
       <select className="form-select" value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder ?? (kind === 'customers' ? 'Walk-in customer' : 'No supplier')}</option>
-        {items.filter((c) => c.active !== 0 || c.id === value).map((c) => (
+        {options.filter((c: any) => c.active !== 0 || c.id === value).map((c: any) => (
           <option key={c.id} value={c.id}>{c.name}{c.phone ? ` · ${c.phone}` : ''}{c.balance ? ` (${kind === 'customers' ? 'owes' : 'owed'} ${money(c.balance)})` : ''}</option>
         ))}
       </select>
