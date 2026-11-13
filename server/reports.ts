@@ -61,7 +61,7 @@ function periods(t: string) {
 }
 
 const CLOSING_GROUPS: Record<string, string> = {
-  sale: 'sales_in', sale_void: 'sales_in', sale_return: 'sales_in', fuel_shift: 'sales_in', fuel_shift_void: 'sales_in', fuel_settle: 'sales_in',
+  sale: 'sales_in', sale_void: 'sales_in', sale_return: 'sales_in', fuel_shift: 'sales_in', fuel_shift_void: 'sales_in', fuel_settle: 'sales_in', fuel_sale: 'sales_in', fuel_sale_void: 'sales_in',
   customer_payment: 'collections', customer_payment_void: 'collections',
   expense: 'expenses_out', expense_void: 'expenses_out',
   purchase: 'suppliers_out', purchase_void: 'suppliers_out', supplier_payment: 'suppliers_out', supplier_payment_void: 'suppliers_out',
@@ -133,21 +133,13 @@ async function buildAlerts(db: D1Database, scope: string[]) {
       detail: `${r.stock_qty} ${r.unit} left (low level ${r.reorder_level})`, link: '/stock' });
   }
   if (scope.includes('fuel')) {
-    for (const r of await all<any>(db, `SELECT t.name, t.stock_qty, t.capacity, p.name AS fuel FROM fuel_tanks t JOIN products p ON p.id = t.product_id
-                                        WHERE t.active = 1 AND (t.stock_qty < 0 OR (t.capacity > 0 AND t.stock_qty < t.capacity * 0.15))`)) {
-      alerts.push({ level: r.stock_qty < 0 ? 'red' : 'yellow', business: 'fuel', title: r.stock_qty < 0 ? `Tank below zero: ${r.name}` : `Tank low: ${r.name}`,
-        detail: r.stock_qty < 0 ? `Book stock is ${r.stock_qty} L ${r.fuel}. A delivery may be missing, or meters/dips are wrong.` : `${r.stock_qty} L of ${r.capacity} L ${r.fuel}`, link: '/settings' });
+    // Fuel shifts: still open from an earlier day, or closed without matching.
+    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'open' AND entry_date < ?`, t)) {
+      alerts.push({ level: 'yellow', business: 'fuel', title: `Fuel shift #${r.number} still open since ${r.entry_date}`, detail: 'Do the xisaab xidh (close the shift) in Sales.', link: '/sales' });
     }
-    for (const r of await all<any>(db, `SELECT d.*, t.name AS tank FROM tank_dips d JOIN fuel_tanks t ON t.id = d.tank_id
-                                        WHERE d.entry_date >= ? AND ABS(d.variance) >= MAX(20, ABS(d.book_qty) * 0.005) ORDER BY d.entry_date DESC`, addDays(t, -14))) {
-      alerts.push({ level: r.variance < 0 ? 'red' : 'yellow', business: 'fuel', title: `Fuel ${r.variance < 0 ? 'missing' : 'extra'} in ${r.tank}`,
-        detail: `${r.entry_date}: dip ${r.measured_qty} L vs book ${r.book_qty} L (${r.variance > 0 ? '+' : ''}${r.variance} L, ${money(r.variance_value)}). ${r.reason ?? ''}`, link: '/settings' });
-    }
-    for (const r of await all<any>(db, `SELECT * FROM fuel_shifts WHERE business_id = 'fuel' AND status = 'completed' AND entry_date >= ? AND (difference <> 0 OR meter_gap_note IS NOT NULL) ORDER BY entry_date DESC`, addDays(t, -7))) {
-      if (r.difference) alerts.push({ level: r.difference < 0 && r.entry_date < t ? 'red' : 'yellow', business: 'fuel',
-        title: r.difference < 0 ? `Fuel sales not fully accounted: ${money(-r.difference)} outstanding` : `Fuel sales over by ${money(r.difference)}`,
-        detail: `${r.entry_date}${r.difference_reason ? `: ${r.difference_reason}` : ''}`, link: '/sales' });
-      if (r.meter_gap_note) alerts.push({ level: 'red', business: 'fuel', title: 'Pump meter did not continue from last reading', detail: `${r.entry_date}: ${r.meter_gap_note}`, link: '/settings' });
+    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'closed' AND remaining <> 0 AND entry_date >= ? ORDER BY number DESC LIMIT 10`, addDays(t, -7))) {
+      alerts.push({ level: 'red', business: 'fuel', title: `Fuel shift #${r.number} did not match: ${money(Math.abs(r.remaining))} ${r.remaining > 0 ? 'short' : 'over'}`,
+        detail: `${r.entry_date}: ${r.explanation}`, link: '/shifts' });
     }
   }
   for (const r of await all<any>(db, `SELECT * FROM daily_closings WHERE status = 'closed' AND total_difference <> 0 AND entry_date >= ? AND business_id IN (${p}) ORDER BY entry_date DESC`, addDays(t, -7), ...scope)) {
@@ -230,7 +222,7 @@ export async function summary(ctx: Ctx) {
   const [methods, counts] = await Promise.all([
     // Money taken for sales (net of refunds/cancellations), per payment method.
     all(ctx.db, `SELECT t.business_id, t.method_id, pm.name AS method_name, SUM(t.debit - t.credit) AS total FROM daily_totals t JOIN payment_methods pm ON pm.id = t.method_id
-                 WHERE t.business_id IN (${p}) AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_shift', 'fuel_shift_void', 'fuel_settle')
+                 WHERE t.business_id IN (${p}) AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_shift', 'fuel_shift_void', 'fuel_settle', 'fuel_sale', 'fuel_sale_void')
                  GROUP BY t.business_id, t.method_id HAVING SUM(t.debit - t.credit) <> 0 ORDER BY pm.sort`, ...scope, from, to),
     all(ctx.db, `SELECT business_id, entry_date, COUNT(*) AS sales FROM sales WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND status = 'completed'
                  GROUP BY business_id, entry_date`, ...scope, from, to),

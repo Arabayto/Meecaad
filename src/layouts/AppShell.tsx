@@ -39,10 +39,11 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Daily Closing', path: '/closing', icon: ClipboardCheck, perms: ['close'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
   ],
-  // The fuel station is kept simple: record the sales, see the day, read the reports, set the rate.
+  // The fuel station: open a shift, record sales, xisaab xidh; shifts, debts, reports, rate.
   fuel: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'Sales', path: '/sales', icon: Fuel, perms: ['fuel', 'reports'] },
+    { label: 'Shifts', path: '/shifts', icon: ClipboardCheck, perms: ['fuel', 'reports'] },
     { label: 'Credit Customers', path: '/customers', icon: UserCheck, perms: ['fuel', 'reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
     { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },

@@ -13,7 +13,7 @@ export const TYPE_LABEL: Record<string, string> = {
   supplier_payment: 'Supplier paid', supplier_payment_void: 'Supplier payment cancelled', transfer: 'Transfer', transfer_void: 'Transfer cancelled',
   owner_in: 'Owner added money', owner_in_void: 'Owner money cancelled', owner_out: 'Owner took money', owner_out_void: 'Owner withdrawal cancelled',
   stock_usage: 'Kitchen usage', stock_waste: 'Waste / damage', stock_adjustment: 'Stock count correction', opening_stock: 'Opening stock',
-  fuel_shift: 'Fuel shift sales', fuel_shift_void: 'Fuel shift cancelled', fuel_settle: 'Fuel money received later', tank_dip: 'Tank dip variance', closing_diff: 'Daily closing difference', closing_reopen: 'Day reopened',
+  fuel_shift: 'Fuel shift sales', fuel_shift_void: 'Fuel shift cancelled', fuel_settle: 'Fuel money received later', fuel_sale: 'Fuel sale', fuel_sale_void: 'Fuel sale cancelled', tank_dip: 'Tank dip variance', closing_diff: 'Daily closing difference', closing_reopen: 'Day reopened',
   shift_diff: 'Shift closing difference', shift_reopen: 'Shift reopened',
 };
 const ACCOUNT_LABEL: Record<string, string> = {

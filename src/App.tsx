@@ -14,7 +14,7 @@ import { PurchasesPage } from './pages/PurchasesPage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { PartiesPage } from './pages/PartiesPage';
 import { MoneyPage } from './pages/MoneyPage';
-import { FuelDashboard, FuelReports, FuelSalesPage, FuelSettings } from './pages/FuelStation';
+import { FuelDashboard, FuelReports, FuelSalesPage, FuelSettings, FuelShiftsPage } from './pages/FuelStation';
 import { ClosingPage } from './pages/ClosingPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { UsersPage } from './pages/UsersPage';
@@ -98,8 +98,9 @@ function PortalPage() {
     users: [['users'], <UsersPage />],
     closings: [['reports'], <ClosingsPage />],
   } : p === 'fuel' ? {
-    // The fuel station: sales, credit customers, reports and settings (rate, prices, pumps, deliveries, expenses).
+    // The fuel station: sales (open shift → sales → xisaab xidh), shifts, credit customers, reports, settings.
     sales: [['fuel', 'reports'], <FuelSalesPage />],
+    shifts: [['fuel', 'reports'], <FuelShiftsPage />],
     customers: [['fuel', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <FuelReports />],
     settings: [['catalog'], <FuelSettings />],
