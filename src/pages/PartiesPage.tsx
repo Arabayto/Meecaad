@@ -16,7 +16,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
   const scopeId = admin ? 'all' : business;
   const list = useLoad(() => get(`/${kind}`, { business: scopeId }), [kind, scopeId]);
   const [search, setSearch] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(true);   // people who have paid stay in the list (with $0)
   const [edit, setEdit] = useState<any>(null);
   const [paying, setPaying] = useState<any>(null);
   const [statement, setStatement] = useState<any>(null);

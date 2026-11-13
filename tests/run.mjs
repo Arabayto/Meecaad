@@ -610,6 +610,20 @@ try {
     const list = await fm.get('/fuel/sessions');
     assert.equal(list.shifts.length, 2);
     assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /did not match: \$60\.00 short/.test(a.title)));
+    // Fuel left over can be passed to the next shift: that is not a mismatch, and the next shift must start with it.
+    await fm.post('/fuel/open', { liters: 100, value: 10000 });
+    await fm.post('/fuel/sales', { method: 'cash', amount: 4000 });
+    assert.equal((await fm.call('POST', '/fuel/close', { carry: true, explanation: '' })).status, 200);
+    const passed = (await fm.get('/fuel/current')).last;
+    assert.deepEqual([passed.carried, passed.carried_to, passed.remaining, passed.remaining_liters], [1, null, 6000, 60]);
+    assert.equal((await fm.call('POST', '/fuel/open', { liters: 50, value: 5000 })).status, 400, 'must include what was passed on');
+    assert.equal((await fm.call('POST', '/fuel/open', { liters: 40, value: 20000 })).status, 400, 'litres too');
+    const next = await fm.post('/fuel/open', { liters: 160, value: 16000 });   // the 60 L passed on + 100 L new
+    const shifts = (await fm.get('/fuel/sessions')).shifts;
+    const third = shifts.find((x) => x.number === 3);
+    assert.deepEqual([third.carried, third.carried_to === next.id], [1, true]);
+    const titles = (await owner.get('/dashboard?business=fuel')).alerts.map((a) => a.title);
+    assert.ok(titles.some((t) => /shift #2 did not match/.test(t)) && !titles.some((t) => /shift #3/.test(t)), 'passed-on shifts are not flagged');
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

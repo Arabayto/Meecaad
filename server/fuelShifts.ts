@@ -5,7 +5,7 @@
 //   opening value the shift is done and the next one can open.
 // Price per litre = opening value ÷ opening litres (no pumps or fuel types).
 
-import { HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, first, idemKey, newId, nowIso, partyIn, paymentMethod, qty, requireBiz, round3, str, today, type Ctx } from './lib';
+import { HttpError, Tx, all, assertDayOpen, bad, bizScope, bool, cents, first, idemKey, newId, nowIso, partyIn, paymentMethod, qty, requireBiz, round3, str, today, type Ctx } from './lib';
 import { rateOn } from './fuel';
 
 const B = 'fuel';
@@ -73,8 +73,14 @@ export async function openShift(ctx: Ctx) {
   if (await first(ctx.db, `SELECT id FROM fuel_sessions WHERE business_id = ? AND status = 'open'`, B)) throw new HttpError(409, 'A shift is already open. Close it first (Xisaab xidh).');
   const liters = qty(ctx.body.liters, 'Litres', { positive: true });
   const value = cents(ctx.body.value, 'Value', { min: 1 });
+  // Fuel passed on from the last shift must be part of this one (new fuel is added on top).
+  const passed = await first<any>(ctx.db, `SELECT * FROM fuel_sessions WHERE business_id = ? AND status = 'closed' AND carried = 1 AND carried_to IS NULL ORDER BY number DESC LIMIT 1`, B);
+  if (passed && (value < passed.remaining || liters < round3(passed.remaining / (passed.opening_value / passed.opening_liters)) - 0.0005)) {
+    throw bad(`This shift must include the ${(passed.remaining / 100).toFixed(2)} passed on from shift #${passed.number}. Add any new fuel on top of it.`);
+  }
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
+  if (passed) tx.run('UPDATE fuel_sessions SET carried_to = ? WHERE id = ? AND carried_to IS NULL', id, passed.id);
   tx.run(`INSERT INTO fuel_sessions (id, business_id, number, entry_date, opening_liters, opening_value, note, opened_by, opened_at)
           VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM fuel_sessions WHERE business_id = ?), ?,?,?,?,?,?)`,
     id, B, B, date, liters, value, str(ctx.body.note, 'Note', { max: 300 }), ctx.user.id, nowIso());
@@ -152,13 +158,16 @@ export async function closeShift(ctx: Ctx) {
   if (!shift) throw new HttpError(409, 'No shift is open');
   const t = (await totals(ctx.db, [shift.id])).get(shift.id);
   const remaining = shift.opening_value - t.sold;
-  const explanation = str(ctx.body.explanation, 'Explanation', { max: 500 });
-  if (remaining !== 0 && !explanation) throw bad(`The sales are ${(remaining / 100).toFixed(2)} less than the opening value. Explain before closing (e.g. fuel left over).`);
+  // Fuel left over can be passed to the next shift (then it is not a mismatch).
+  const carry = bool(ctx.body.carry);
+  if (carry && remaining <= 0) throw bad('There is nothing left to pass to the next shift');
+  const explanation = str(ctx.body.explanation, 'Explanation', { max: 500 }) ?? (carry ? 'Passed to the next shift' : null);
+  if (remaining !== 0 && !explanation) throw bad(`The sales are ${(remaining / 100).toFixed(2)} ${remaining > 0 ? 'less' : 'more'} than the opening value. Pass the rest to the next shift, or explain before closing.`);
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`UPDATE fuel_sessions SET status = 'closed', closed_by = ?, closed_at = ?, sold_total = ?, remaining = ?, explanation = ? WHERE id = ? AND status = 'open'`,
-    ctx.user.id, nowIso(), t.sold, remaining, explanation, shift.id);
-  tx.audit('close', 'fuel_shift', shift.id, B, { opening: shift.opening_value, sold: t.sold, remaining, explanation });
-  return tx.commit(idemKey(ctx), { id: shift.id, sold: t.sold, remaining });
+  tx.run(`UPDATE fuel_sessions SET status = 'closed', closed_by = ?, closed_at = ?, sold_total = ?, remaining = ?, explanation = ?, carried = ? WHERE id = ? AND status = 'open'`,
+    ctx.user.id, nowIso(), t.sold, remaining, explanation, carry ? 1 : 0, shift.id);
+  tx.audit('close', 'fuel_shift', shift.id, B, { opening: shift.opening_value, sold: t.sold, remaining, explanation, carried: carry });
+  return tx.commit(idemKey(ctx), { id: shift.id, sold: t.sold, remaining, carried: carry });
 }
 
 /** All shifts in a period with their totals (Shifts page, dashboard, reports). */

@@ -137,7 +137,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
     for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'open' AND entry_date < ?`, t)) {
       alerts.push({ level: 'yellow', business: 'fuel', title: `Fuel shift #${r.number} still open since ${r.entry_date}`, detail: 'Do the xisaab xidh (close the shift) in Sales.', link: '/sales' });
     }
-    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'closed' AND remaining <> 0 AND entry_date >= ? ORDER BY number DESC LIMIT 10`, addDays(t, -7))) {
+    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'closed' AND remaining <> 0 AND carried = 0 AND entry_date >= ? ORDER BY number DESC LIMIT 10`, addDays(t, -7))) {
       alerts.push({ level: 'red', business: 'fuel', title: `Fuel shift #${r.number} did not match: ${money(Math.abs(r.remaining))} ${r.remaining > 0 ? 'short' : 'over'}`,
         detail: `${r.entry_date}: ${r.explanation}`, link: '/shifts' });
     }

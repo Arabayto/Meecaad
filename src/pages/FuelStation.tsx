@@ -21,6 +21,7 @@ const perLitre = (s: any) => money(Math.round(s.opening_value / s.opening_liters
 /** Open / Matched / Not matched. */
 function ShiftStatus({ s }: { s: any }) {
   if (s.status === 'open') return <StatusBadge label="Open" tone="yellow" />;
+  if (s.remaining !== 0 && s.carried) return <StatusBadge label={`${money(s.remaining)} passed to next shift`} tone="green" />;
   return s.remaining === 0 ? <StatusBadge label="Matched" tone="green" /> : <StatusBadge label={`Not matched ${money(Math.abs(s.remaining))}`} tone="red" />;
 }
 
@@ -32,8 +33,8 @@ function Count({ s, methods }: { s: any; methods: { id: string; name: string }[]
       {methods.map((m) => <Fragment key={m.id}><span>{m.name}</span><span>{money(s.by_method[m.id] ?? 0)}</span></Fragment>)}
       <span>Customer debts</span><span>{money(s.debts)}</span>
       <span className="kv-total">Total sold</span><span className="kv-total">{money(s.sold)} of {money(s.opening_value)}</span>
-      <span className="kv-total">{left === 0 ? 'Matched' : left > 0 ? 'Remaining' : 'Over'}</span>
-      <span className="kv-total" style={{ color: left === 0 ? '#15803d' : '#b91c1c' }}>{left === 0 ? '✓' : money(Math.abs(left))}</span>
+      <span className="kv-total">{left === 0 ? 'Matched' : s.status === 'closed' && s.carried ? 'Passed to next shift' : left > 0 ? 'Remaining' : 'Over'}</span>
+      <span className="kv-total" style={{ color: left === 0 || s.carried ? '#15803d' : '#b91c1c' }}>{left === 0 ? '✓' : money(Math.abs(left))}</span>
     </div>
   );
 }
@@ -107,12 +108,14 @@ export function FuelSalesPage() {
 }
 
 function OpenShift({ last, onDone }: { last: any; onDone: () => void }) {
-  const [liters, setLiters] = useState('');
-  const [value, setValue] = useState('');
+  // Fuel the last shift passed on is part of this shift: it starts here and new fuel is added on top.
+  const carry = last && last.status === 'closed' && last.carried && !last.carried_to && last.remaining > 0 ? last : null;
+  const [liters, setLiters] = useState(carry ? String(carry.remaining_liters) : '');
+  const [value, setValue] = useState(carry ? fromCents(carry.remaining) : '');
   const [note, setNote] = useState('');
   const { run, busy } = useSubmit();
   const l = Number(liters), v = toCents(value);
-  const carry = last && last.remaining > 0 ? last : null;
+  const short = Boolean(carry) && (v < carry.remaining || l < carry.remaining_liters - 0.0005);
   const open = async () => {
     if (await run((key) => post('/fuel/open', { liters: l, value: v, note }, key), 'Shift opened')) onDone();
   };
@@ -121,8 +124,8 @@ function OpenShift({ last, onDone }: { last: any; onDone: () => void }) {
       <div className="panel__header"><div><p>Start</p><h2>Open shift</h2></div></div>
       <p className="small muted" style={{ margin: 0 }}>Enter the fuel this shift works with and what it is worth, e.g. 2,000 L = $2,000. At the end, the sales must add up to this.</p>
       {carry && (
-        <div className="mc-note">Shift #{carry.number} closed with {money(carry.remaining)} ({num(carry.remaining_liters)} L) left.{' '}
-          <button type="button" className="btn btn-ghost btn-xs" onClick={() => { setLiters(String(carry.remaining_liters)); setValue(fromCents(carry.remaining)); }}>Use it as the start</button></div>
+        <div className="mc-note">Shift #{carry.number} passed {money(carry.remaining)} ({num(carry.remaining_liters)} L) to this shift, so it is already filled in. If you received new fuel, add its litres and value on top.{' '}
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => { setLiters(String(carry.remaining_liters)); setValue(fromCents(carry.remaining)); }}>Reset</button></div>
       )}
       <div className="form-row-3">
         <Field label="Litres"><input className="form-input" inputMode="decimal" value={liters} onChange={(e) => setLiters(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="2000" autoFocus /></Field>
@@ -130,7 +133,7 @@ function OpenShift({ last, onDone }: { last: any; onDone: () => void }) {
         <Field label="Note (optional)"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. morning shift" /></Field>
       </div>
       {l > 0 && v > 0 && <p className="small" style={{ margin: 0 }}>Price: <strong>{money(Math.round(v / l))} per litre</strong></p>}
-      <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !(l > 0) || !(v > 0)} onClick={open}>Open shift</button></div>
+      <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !(l > 0) || !(v > 0) || short} onClick={open}>Open shift</button></div>
     </div>
   );
 }
@@ -186,23 +189,32 @@ function NewSale({ shift, rate, customers, onDone }: { shift: any; rate: number 
 
 function CloseShift({ s, methods, onClose, onDone }: { s: any; methods: { id: string; name: string }[]; onClose: () => void; onDone: (id: string) => void }) {
   const [explanation, setExplanation] = useState('');
+  const [mode, setMode] = useState<'carry' | 'explain'>('carry');
   const { run, busy } = useSubmit();
   const matched = s.remaining_now === 0;
+  const canCarry = s.remaining_now > 0;
+  const carry = canCarry && mode === 'carry';
   const close = async () => {
-    const r = await run((key) => post('/fuel/close', { explanation }, key), 'Shift closed');
+    const r = await run((key) => post('/fuel/close', carry ? { carry: true } : { explanation }, key), carry ? 'Shift closed — the rest goes to the next shift' : 'Shift closed');
     if (r) onDone(r.id);
   };
   return (
     <Modal open onClose={onClose} title={`Xisaab xidh — shift #${s.number}`} width="md"
       footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Back</button>
-        <button type="button" className="btn btn-primary" disabled={busy || (!matched && !explanation.trim())} onClick={close}>Close shift</button></>}>
+        <button type="button" className="btn btn-primary" disabled={busy || (!matched && !carry && !explanation.trim())} onClick={close}>Close shift</button></>}>
       <div className="form-stack">
         <Count s={s} methods={methods} />
         {matched
           ? <div className="mc-note"><CheckCircle2 size={14} style={{ verticalAlign: -2 }} /> Matched: {money(s.opening_value)} fully accounted for. The next shift can open.</div>
           : <>
-            <div className="mc-error">Not matched: {money(Math.abs(s.remaining_now))} {s.remaining_now > 0 ? `less than the opening value (${num(s.remaining_liters)} L)` : 'more than the opening value'}. Explain it to close.</div>
-            <Field label="Explanation (required)"><input className="form-input" value={explanation} onChange={(e) => setExplanation(e.target.value)} placeholder="e.g. fuel left over for the next shift" /></Field>
+            <div className="mc-warn">{money(Math.abs(s.remaining_now))} {s.remaining_now > 0 ? `(${num(s.remaining_liters)} L) of the opening value is not sold` : 'more than the opening value was sold'}.</div>
+            {canCarry && (
+              <div className="form-stack">
+                <label className="row"><input type="radio" name="close-mode" checked={mode === 'carry'} onChange={() => setMode('carry')} /> <span><strong>Pass it to the next shift</strong> — the fuel is still there; the next shift starts with it. This shift counts as done.</span></label>
+                <label className="row"><input type="radio" name="close-mode" checked={mode === 'explain'} onChange={() => setMode('explain')} /> <span><strong>Something is wrong</strong> — fuel or money is missing. It is flagged and needs an explanation.</span></label>
+              </div>
+            )}
+            {(!canCarry || mode === 'explain') && <Field label="Explanation (required)"><input className="form-input" value={explanation} onChange={(e) => setExplanation(e.target.value)} placeholder="e.g. money still with the attendant" /></Field>}
           </>}
       </div>
     </Modal>
@@ -250,7 +262,7 @@ export function FuelShiftsPage() {
   const [slip, setSlip] = useState<any>(null);
   const methods: { id: string; name: string }[] = list.data?.methods ?? [];
   const filter = useFilters<any>(list.data?.shifts ?? [], [
-    { key: 'status', label: 'Status', get: (s) => (s.status === 'open' ? 'Open' : s.remaining === 0 ? 'Matched' : 'Not matched') },
+    { key: 'status', label: 'Status', get: (s) => (s.status === 'open' ? 'Open' : s.remaining === 0 ? 'Matched' : s.carried ? 'Passed on' : 'Not matched') },
     { key: 'by', label: 'Opened by', get: (s) => s.opened_by_name },
   ]);
   return (
@@ -367,9 +379,10 @@ export function FuelReports() {
   const methods: { id: string; name: string }[] = d?.methods ?? [];
   // One row per day: all its shifts added up.
   const days = Object.values((d?.shifts ?? []).reduce((acc: Record<string, any>, s: any) => {
-    const x = acc[s.entry_date] ?? (acc[s.entry_date] = { date: s.entry_date, shifts: 0, open: 0, opening: 0, sold: 0, debts: 0, by: {} as Record<string, number>, left: 0, rate: s.rate, slsh: 0 });
+    const x = acc[s.entry_date] ?? (acc[s.entry_date] = { date: s.entry_date, shifts: 0, open: 0, opening: 0, sold: 0, debts: 0, by: {} as Record<string, number>, left: 0, carried: 0, rate: s.rate, slsh: 0 });
     x.shifts++; if (s.status === 'open') x.open++;
-    x.opening += s.opening_value; x.sold += s.sold; x.debts += s.debts; x.left += s.status === 'open' ? s.remaining_now : s.remaining;
+    x.opening += s.opening_value; x.sold += s.sold; x.debts += s.debts; x.left += s.status === 'open' ? s.remaining_now : s.carried ? 0 : s.remaining;
+    if (s.status === 'closed' && s.carried) x.carried += s.remaining;
     if (s.rate) x.slsh += Math.round((s.sold / 100) * s.rate);
     for (const m of methods) x.by[m.id] = (x.by[m.id] ?? 0) + (s.by_method[m.id] ?? 0);
     return acc;
@@ -402,7 +415,7 @@ export function FuelReports() {
                     <td className="num">{money(x.opening)}</td><td className="num"><strong>{money(x.sold)}</strong></td>
                     {hasRate && <td className="num">{x.slsh ? x.slsh.toLocaleString('en-US') : '—'}</td>}
                     {methods.map((m) => <td key={m.id} className="num">{money(x.by[m.id] ?? 0)}</td>)}<td className="num">{money(x.debts)}</td>
-                    <td>{x.open ? <StatusBadge label="Shift open" tone="yellow" /> : x.left === 0 ? <StatusBadge label="Matched" tone="green" /> : <StatusBadge label={`Not matched ${money(Math.abs(x.left))}`} tone="red" />}</td></tr>
+                    <td>{x.open ? <StatusBadge label="Shift open" tone="yellow" /> : x.left === 0 ? <StatusBadge label={x.carried ? `Matched · ${money(x.carried)} passed on` : 'Matched'} tone="green" /> : <StatusBadge label={`Not matched ${money(Math.abs(x.left))}`} tone="red" />}</td></tr>
                 ))}
                 {!days.length && <tr><td colSpan={methods.length + 6} className="muted">No shifts in this period.</td></tr>}
                 {days.length > 0 && (
