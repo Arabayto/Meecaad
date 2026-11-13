@@ -230,7 +230,7 @@ function ShiftSlip({ s, rate, onClose }: { s: any; rate?: number | null; onClose
         <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
         <h3 style={{ margin: 0 }}>Meecaad Fuel Station — shift #{s.number}</h3>
         <p className="small" style={{ margin: 0 }}>
-          Opened {fmtTime(s.opened_at)} by {s.opened_by_name} · {num(s.opening_liters)} L = {money(s.opening_value)} ({perLitre(s)}/L){slsh(s.opening_value, s.rate ?? rate) && ` · ${slsh(s.opening_value, s.rate ?? rate)}`}
+          Opened {fmtTime(s.opened_at)} by {s.opened_by_name} · {num(s.opening_liters)} L = {money(s.opening_value)} ({perLitre(s)}/L){s.carried_in > 0 && ` — includes ${money(s.carried_in)} passed from shift #${s.carried_from}`}{slsh(s.opening_value, s.rate ?? rate) && ` · ${slsh(s.opening_value, s.rate ?? rate)}`}
           {s.closed_at && <><br />Closed {fmtTime(s.closed_at)} by {s.closed_by_name}</>}
         </p>
         <ShiftStatus s={s} />
@@ -280,7 +280,7 @@ export function FuelShiftsPage() {
                 <tr key={s.id} className="tr--clickable" onClick={async () => setSlip(await get(`/fuel/sessions/${s.id}`))}>
                   <td><strong>{s.number}</strong></td>
                   <td className="small">{s.entry_date}<div className="muted">{fmtTime(s.opened_at)}</div></td>
-                  <td className="num">{money(s.opening_value)}<div className="small muted">{num(s.opening_liters)} L</div></td>
+                  <td className="num">{money(s.opening_value)}<div className="small muted">{num(s.opening_liters)} L</div>{s.carried_in > 0 && <div className="small muted">incl. {money(s.carried_in)} from #{s.carried_from}</div>}</td>
                   <td className="num"><strong>{money(s.sold)}</strong></td>
                   {methods.map((m) => <td key={m.id} className="num">{money(s.by_method[m.id] ?? 0)}</td>)}
                   <td className="num">{money(s.debts)}</td>
@@ -357,7 +357,7 @@ export function FuelDashboard() {
             <thead><tr><th>#</th><th>Date</th><th className="num">Opening</th><th className="num">Sold</th>{week.data.methods.map((m: any) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
             <tbody>
               {week.data.shifts.map((x: any) => (
-                <tr key={x.id}><td>{x.number}</td><td>{x.entry_date}</td><td className="num">{money(x.opening_value)}</td><td className="num"><strong>{money(x.sold)}</strong></td>
+                <tr key={x.id}><td>{x.number}</td><td>{x.entry_date}</td><td className="num">{money(x.opening_value)}{x.carried_in > 0 && <div className="small muted">incl. {money(x.carried_in)} from #{x.carried_from}</div>}</td><td className="num"><strong>{money(x.sold)}</strong></td>
                   {week.data.methods.map((m: any) => <td key={m.id} className="num">{money(x.by_method[m.id] ?? 0)}</td>)}<td className="num">{money(x.debts)}</td><td><ShiftStatus s={x} /></td></tr>
               ))}
               {!week.data.shifts.length && <tr><td colSpan={week.data.methods.length + 6} className="muted">No shifts in the last 7 days.</td></tr>}
@@ -381,7 +381,7 @@ export function FuelReports() {
   const days = Object.values((d?.shifts ?? []).reduce((acc: Record<string, any>, s: any) => {
     const x = acc[s.entry_date] ?? (acc[s.entry_date] = { date: s.entry_date, shifts: 0, open: 0, opening: 0, sold: 0, debts: 0, by: {} as Record<string, number>, left: 0, carried: 0, rate: s.rate, slsh: 0 });
     x.shifts++; if (s.status === 'open') x.open++;
-    x.opening += s.opening_value; x.sold += s.sold; x.debts += s.debts; x.left += s.status === 'open' ? s.remaining_now : s.carried ? 0 : s.remaining;
+    x.opening += s.opening_value - (s.carried_in ?? 0); x.sold += s.sold; x.debts += s.debts; x.left += s.status === 'open' ? s.remaining_now : s.carried ? 0 : s.remaining;
     if (s.status === 'closed' && s.carried) x.carried += s.remaining;
     if (s.rate) x.slsh += Math.round((s.sold / 100) * s.rate);
     for (const m of methods) x.by[m.id] = (x.by[m.id] ?? 0) + (s.by_method[m.id] ?? 0);
@@ -408,7 +408,7 @@ export function FuelReports() {
           </section>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th className="num">Shifts</th><th className="num">Opening</th><th className="num">Sold</th>{hasRate && <th className="num">Sold (SLSH)</th>}{methods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
+              <thead><tr><th>Date</th><th className="num">Shifts</th><th className="num">New fuel</th><th className="num">Sold</th>{hasRate && <th className="num">Sold (SLSH)</th>}{methods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
               <tbody>
                 {days.map((x) => (
                   <tr key={x.date}><td>{x.date}{x.rate && <div className="small muted">{x.rate.toLocaleString('en-US')} SLSH/$</div>}</td><td className="num">{x.shifts}</td>

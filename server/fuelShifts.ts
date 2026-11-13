@@ -28,6 +28,14 @@ async function totals(db: D1Database, ids: string[]) {
   }));
 }
 
+/** For each shift, the fuel it took over from the previous shift (so it is not counted twice). */
+async function carriedIn(db: D1Database, ids: string[]) {
+  if (!ids.length) return new Map<string, { amount: number; from: number }>();
+  const rows = await all<any>(db, `SELECT carried_to AS id, remaining AS amount, number AS from_number FROM fuel_sessions WHERE carried_to IN (${ids.map(() => '?').join(',')})`, ...ids);
+  return new Map(rows.map((r) => [r.id, { amount: r.amount, from: r.from_number }]));
+}
+const withCarry = (s: any, c: Map<string, { amount: number; from: number }>) => ({ ...s, carried_in: c.get(s.id)?.amount ?? 0, carried_from: c.get(s.id)?.from ?? null });
+
 function withTotals(s: any, t: any) {
   const price = s.opening_value / s.opening_liters;   // cents per litre
   const remaining = s.opening_value - t.sold;
@@ -180,8 +188,9 @@ export async function listShifts(ctx: Ctx) {
     all<any>(ctx.db, 'SELECT rate_date, rate, set_at FROM exchange_rates WHERE rate_date <= ?', to),
   ]);
   const t = await totals(ctx.db, rows.map((r) => r.id));
+  const c = await carriedIn(ctx.db, rows.map((r) => r.id));
   const methods = await all(ctx.db, 'SELECT id, name FROM payment_methods WHERE active = 1 ORDER BY sort');
-  return { from, to, methods, shifts: rows.map((r) => ({ ...withTotals(r, t.get(r.id)), rate: rateOn(rates, r.entry_date) })) };
+  return { from, to, methods, shifts: rows.map((r) => ({ ...withCarry(withTotals(r, t.get(r.id)), c), rate: rateOn(rates, r.entry_date) })) };
 }
 
 export async function getShift(ctx: Ctx) {
@@ -189,5 +198,5 @@ export async function getShift(ctx: Ctx) {
   const s = await first<any>(ctx.db, `${SESSION_SELECT} WHERE s.id = ?`, ctx.params.id);
   if (!s) throw new HttpError(404, 'Not found');
   const [t, sales, methods] = await Promise.all([totals(ctx.db, [s.id]), salesOf(ctx.db, s.id), all(ctx.db, 'SELECT id, name FROM payment_methods WHERE active = 1 ORDER BY sort')]);
-  return { ...withTotals(s, t.get(s.id)), sales, methods };
+  return { ...withCarry(withTotals(s, t.get(s.id)), await carriedIn(ctx.db, [s.id])), sales, methods };
 }

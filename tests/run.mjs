@@ -622,6 +622,8 @@ try {
     const shifts = (await fm.get('/fuel/sessions')).shifts;
     const third = shifts.find((x) => x.number === 3);
     assert.deepEqual([third.carried, third.carried_to === next.id], [1, true]);
+    const fourth = shifts.find((x) => x.number === 4);
+    assert.deepEqual([fourth.carried_in, fourth.carried_from, shifts.find((x) => x.number === 3).carried_in], [6000, 3, 0], 'passed-on fuel is not counted twice');
     const titles = (await owner.get('/dashboard?business=fuel')).alerts.map((a) => a.title);
     assert.ok(titles.some((t) => /shift #2 did not match/.test(t)) && !titles.some((t) => /shift #3/.test(t)), 'passed-on shifts are not flagged');
   });
