@@ -180,7 +180,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
   for (const r of await all<any>(db, `SELECT b.business_id, pm.name, b.balance FROM account_balances b JOIN payment_methods pm ON pm.id = b.method_id
       WHERE b.account = 'cash' AND b.business_id IN (${p}) AND b.balance < 0`, ...scope)) {
     alerts.push({ level: 'red', business: r.business_id, title: `${r.name} balance is negative (${money(r.balance)})`,
-      detail: 'More money was recorded going out than coming in. Check for a missing sale, opening balance or transfer.', link: '/money' });
+      detail: 'More money was recorded going out than coming in. Check for a missing sale, or an expense recorded under the wrong payment method.', link: '/money' });
   }
   return alerts.sort((a, b) => (a.level === b.level ? 0 : a.level === 'red' ? -1 : 1));
 }

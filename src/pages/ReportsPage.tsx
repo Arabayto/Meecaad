@@ -156,7 +156,7 @@ function PnlRow({ label, cols, get: value, strong, muted }: { label: string; col
   );
 }
 
-function Ledger({ scope }: { scope: string }) {
+export function Ledger({ scope }: { scope: string }) {
   const { today } = useAuth();
   const [from, setFrom] = useState(addDays(today, -6));
   const [to, setTo] = useState(today);

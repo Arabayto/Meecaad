@@ -205,3 +205,13 @@
 .item-tile span { font-size: 12px; color: var(--text-muted); }
 .item-tile:hover { border-color: var(--primary); }
 .item-tile--on { border-color: var(--primary); background: var(--primary-light, #e8f5e8); box-shadow: 0 0 0 2px rgba(11,143,8,0.15); }
+
+/* Owner overview: one card per business */
+.owner-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.owner-card { display: grid; gap: 4px; text-align: left; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--shadow-sm); cursor: pointer; font: inherit; color: inherit; min-width: 0; }
+.owner-card:hover { border-color: var(--primary); }
+.owner-card__head { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.owner-card__go { margin-left: auto; color: var(--text-muted); }
+.owner-card__label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 6px; }
+.owner-card__big { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.owner-card__kv { display: grid; margin-top: 8px; }

@@ -51,9 +51,8 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },
   ],
   admin: [
-    { label: 'All Businesses', path: '/', icon: Home, perms: ['users'] },
-    { label: 'Combined Reports', path: '/reports', icon: BarChart3, perms: ['users'] },
-    { label: 'Money & Transfers', path: '/money', icon: Wallet, perms: ['users'] },
+    { label: 'Overview', path: '/', icon: Home, perms: ['users'] },
+    { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['users'] },
     { label: 'Customers', path: '/customers', icon: UserCheck, perms: ['users'] },
     { label: 'Suppliers', path: '/suppliers', icon: Users, perms: ['users'] },
     { label: 'Users & Roles', path: '/users', icon: BookOpen, perms: ['users'] },

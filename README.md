@@ -75,6 +75,10 @@ How the common mistakes are avoided:
 - There is always at least one active owner. Records are never deleted: the journal and audit log are append-only.
 - **Who did what:** lists show who recorded each entry (sales, expenses, orders, closings), and can be searched and filtered by person, status, category and payment method.
 
+## Owner admin (all businesses together)
+
+Kept short on purpose. **Overview:** one card per business with **Sales, Spent and Profit** (Today / This week / This month, with the change against the period before; tap a card to open that business), then the three totals, a few lines in plain words (which business brings the most, who is losing money, what customers owe), the top things that need attention, and a small money-position box. **Reports:** by business, where the money went (expenses by kind), how customers paid, and day by day; "All transactions" is a second tab. *Spent* = cost of goods + expenses + losses and cash shortages; *Profit* = Sales − Spent. There is no Money & Transfers page in the owner admin (the store still has its own Money page until it is redone).
+
 ## Owner dashboard, closing, alerts
 
 - Switch **All Businesses / Restaurant & Cafe / Fuel Station / Store**; **Today / This week / This month**, each compared with yesterday / the same days last week / the same days last month. Combined figures are always shown next to each business's own figures.

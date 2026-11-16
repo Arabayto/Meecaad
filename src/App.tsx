@@ -8,6 +8,7 @@ import { SellPage } from './pages/SellPage';
 import { NewOrderPage, OrdersPage } from './pages/RestaurantPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
 import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
+import { OwnerOverview, OwnerReports } from './pages/OwnerPages';
 import { SalesPage } from './pages/SalesPage';
 import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
@@ -68,7 +69,8 @@ function PortalHome() {
   const { can, portal, path, user } = useAuth();
   if (portal === 'restaurant' && can('reports')) return <RestaurantDashboard />;
   if (portal === 'fuel' && can('reports')) return <FuelDashboard />;
-  if (portal === 'admin' || can('reports')) return <DashboardPage />;
+  if (portal === 'admin') return <OwnerOverview />;
+  if (can('reports')) return <DashboardPage />;
   const first = visibleNav(portal!, can, Boolean(user?.owner)).find((n) => n.path !== '/');
   return first ? <Navigate to={path(first.path)} replace /> : <div className="mc-note">Your account has no pages in this portal. Ask the owner.</div>;
 }
@@ -79,8 +81,7 @@ function PortalPage() {
   const { portal } = useAuth();
   const p = portal!;
   const pages: Record<string, [Perm[], JSX.Element]> = p === 'admin' ? {
-    reports: [['users'], <ReportsPage />],
-    money: [['users'], <MoneyPage />],
+    reports: [['users'], <OwnerReports />],
     customers: [['users'], <PartiesPage kind="customers" />],
     suppliers: [['users'], <PartiesPage kind="suppliers" />],
     users: [['users'], <UsersPage />],
