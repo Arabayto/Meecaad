@@ -105,18 +105,19 @@ function SalesTable({ sales, canVoid, onVoid }: { sales: any[]; canVoid: boolean
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Time</th><th className="num">Amount</th><th>Received as</th><th>By</th><th></th></tr></thead>
+        <thead><tr><th>Time</th><th className="num">Amount</th><th>Item</th><th>Received as</th><th>By</th><th></th></tr></thead>
         <tbody>
           {sales.map((x) => (
             <tr key={x.id} style={{ opacity: x.status === 'voided' ? 0.5 : 1 }}>
               <td className="small">{fmtClock(x.created_at)}</td>
               <td className="num"><strong>{money(x.amount)}</strong>{x.slsh_amount && <div className="small muted">{x.slsh_amount.toLocaleString('en-US')} SLSH</div>}</td>
+              <td>{x.item_name ? <><strong>{x.item_name}</strong><div className="small muted">{num3(x.qty)} {x.item_unit}</div></> : <span className="muted">—</span>}</td>
               <td>{x.method_name ?? <>Debt: <strong>{x.customer_name}</strong></>}{x.status === 'voided' && <div><StatusBadge label="Cancelled" tone="red" /> <span className="small muted">{x.void_reason}</span></div>}</td>
               <td className="small">{x.created_by_name}</td>
               <td>{canVoid && onVoid && x.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => onVoid(x)}>Cancel</button>}</td>
             </tr>
           ))}
-          {!sales.length && <tr><td colSpan={5} className="muted">No sales yet.</td></tr>}
+          {!sales.length && <tr><td colSpan={6} className="muted">No sales yet.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -160,27 +161,89 @@ function OpenShift({ d, onDone, onSlip }: { d: any; onDone: () => void; onSlip: 
   );
 }
 
+/** An item's price in its own money, with the other money beside it when there is a rate. */
+export function priceText(it: { price: number; currency: string }, rate?: number | null) {
+  const own = it.currency === 'USD' ? money(it.price) : `${it.price.toLocaleString('en-US')} SLSH`;
+  if (!rate) return own;
+  const other = it.currency === 'USD' ? `${Math.round((it.price / 100) * rate).toLocaleString('en-US')} SLSH` : money(Math.round((it.price / rate) * 100));
+  return `${own} (≈ ${other})`;
+}
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
 function NewSale({ rate, customers, onDone }: { rate: number | null; customers: { data: any; reload: () => void }; onDone: () => void }) {
-  const { activeMethods } = useAuth();
-  const [amount, setAmount] = useState('');
-  const [inSlsh, setInSlsh] = useState(false);
+  const { activeMethods, can } = useAuth();
+  const items = useLoad(() => get('/fuel/items'), []);
+  const list: any[] = (items.data ?? []).filter((i: any) => i.active);
+  const [itemId, setItemId] = useState('');
+  const [by, setBy] = useState<'qty' | 'amount'>('qty');
+  const [value, setValue] = useState('');
   const [method, setMethod] = useState('cash');   // a payment method id, or 'debt'
   const [customer, setCustomer] = useState('');
+  const [find, setFind] = useState('');
   const { run, busy } = useSubmit();
-  const usd = inSlsh && rate ? Math.round((Number(amount || 0) / rate) * 100) : toCents(amount);
-  const ok = usd > 0 && (method !== 'debt' || customer);
+  const item = list.find((i) => i.id === itemId) ?? (list.length === 1 ? list[0] : null);
+
+  // Before the manager adds items, a sale can still be a plain amount in dollars.
+  const plain = items.data !== undefined && items.data !== null && list.length === 0;
+  let total = 0;   // in the item's own money (cents for USD, shillings for SLSH)
+  let qty = 0;
+  if (plain) { total = toCents(value); }
+  else if (item && value) {
+    if (by === 'qty') { qty = round3(Number(value) || 0); total = Math.round(qty * item.price); }
+    else { total = item.currency === 'USD' ? toCents(value) : Math.round(Number(value) || 0); qty = round3(total / item.price); }
+  }
+  const usd = plain ? total : !item || !total ? 0 : item.currency === 'USD' ? total : rate ? Math.round((total / rate) * 100) : 0;
+  const slshValue = !total ? null : plain ? slsh(usd, rate) : item?.currency === 'SLSH' ? `${total.toLocaleString('en-US')} SLSH` : slsh(usd, rate);
+  const needRate = Boolean(item && item.currency === 'SLSH' && !rate);
+  const short = Boolean(item?.track_stock && qty > item.stock_qty);
+  const ok = total > 0 && usd > 0 && !needRate && (plain || item) && (method !== 'debt' || customer);
+  const shown = list.filter((i) => !find.trim() || `${i.name} ${i.category}`.toLowerCase().includes(find.trim().toLowerCase()));
+
   const save = async () => {
     if (!ok || busy) return;
-    const body = method === 'debt' ? { customer, amount: usd } : inSlsh ? { method: 'cash', slsh: amount } : { method, amount: usd };
-    if (await run((key) => post('/fuel/sales', body, key), `${money(usd)} recorded`)) { setAmount(''); setCustomer(''); onDone(); }
+    const who = method === 'debt' ? { customer } : { method };
+    const what = plain ? { amount: total } : { item: item.id, ...(by === 'qty' ? { qty } : { amount: total }) };
+    if (await run((key) => post('/fuel/sales', { ...who, ...what }, key), `${money(usd)} recorded`)) { setValue(''); setCustomer(''); onDone(); items.reload(); }
   };
-  const pick = (m: string) => { setMethod(m); if (m !== 'cash') setInSlsh(false); };
+
   return (
     <div className="panel form-stack">
-      <div className="panel__header"><div><p>New</p><h2>Record money collected</h2></div></div>
+      <div className="panel__header"><div><p>New</p><h2>Record a sale</h2></div></div>
+      {plain && <div className="mc-note">No items yet. {can('catalog') ? 'Add them in Inventory so prices are set for everyone.' : 'The manager must add the items and prices in Inventory.'} Until then you can record an amount.</div>}
+      {!plain && (
+        <>
+          {list.length > 8 && <input className="form-input" type="search" placeholder="Search item" value={find} onChange={(e) => setFind(e.target.value)} aria-label="Search item" />}
+          <div className="item-grid">
+            {shown.map((i) => (
+              <button key={i.id} type="button" className={`item-tile ${item?.id === i.id ? 'item-tile--on' : ''}`} onClick={() => { setItemId(i.id); setValue(''); }}>
+                <strong>{i.name}</strong><span>{priceText(i, null)} / {i.unit}</span>
+              </button>
+            ))}
+            {!shown.length && <span className="muted">No item matches.</span>}
+          </div>
+        </>
+      )}
+      {!plain && item && (
+        <div className="row" style={{ gap: 6 }}>
+          <button type="button" className={`btn btn-sm ${by === 'qty' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setBy('qty'); setValue(''); }}>By quantity ({item.unit})</button>
+          <button type="button" className={`btn btn-sm ${by === 'amount' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setBy('amount'); setValue(''); }}>By amount ({item.currency === 'USD' ? '$' : 'SLSH'})</button>
+        </div>
+      )}
+      {(plain || item) && (
+        <Field label={plain ? 'Amount (USD)' : by === 'qty' ? `How many ${item.unit}` : `Amount (${item.currency === 'USD' ? 'USD' : 'SLSH'})`}>
+          <input className="form-input" inputMode="decimal" style={{ fontSize: 22, minHeight: 52 }} value={value} placeholder={by === 'qty' && !plain ? '0' : item?.currency === 'SLSH' ? '0' : '0.00'}
+            onChange={(e) => setValue(e.target.value.replace(/[^0-9.]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter') save(); }} />
+        </Field>
+      )}
+      {total > 0 && (
+        <div className="cart-total"><span>{!plain && item ? `${num3(qty)} ${item.unit} × ${priceText(item, null)}` : 'Total'}</span>
+          <span>{usd > 0 ? money(usd) : '—'}{slshValue && <span className="small muted"> · {slshValue}</span>}</span></div>
+      )}
+      {needRate && <div className="mc-error">This item is priced in Shillings and there is no exchange rate yet. Ask the manager to set it (Settings).</div>}
+      {short && <div className="mc-warn">Only {num3(item.stock_qty)} {item.unit} of {item.name} in stock. You can still record it; tell the manager to check the stock.</div>}
       <div className="method-picker">
-        {activeMethods.map((m) => <button key={m.id} type="button" className={`btn ${method === m.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick(m.id)}>{m.name}</button>)}
-        <button type="button" className={`btn ${method === 'debt' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick('debt')}>Customer debt</button>
+        {activeMethods.map((m) => <button key={m.id} type="button" className={`btn ${method === m.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMethod(m.id)}>{m.name}</button>)}
+        <button type="button" className={`btn ${method === 'debt' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMethod('debt')}>Customer debt</button>
       </div>
       {method === 'debt' && (
         <>
@@ -188,25 +251,11 @@ function NewSale({ rate, customers, onDone }: { rate: number | null; customers: 
           <p className="small muted" style={{ margin: 0 }}>The customer must be in the list. Use “+ New” to add one first.</p>
         </>
       )}
-      <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 220px' }}>
-          <Field label={inSlsh ? 'Amount (SLSH)' : 'Amount (USD)'}>
-            <input className="form-input" inputMode="decimal" style={{ fontSize: 22, minHeight: 52 }} value={amount} placeholder={inSlsh ? '0' : '0.00'}
-              onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter') save(); }} />
-          </Field>
-        </div>
-        {rate && method === 'cash' && (
-          <div className="row" style={{ gap: 4, flexWrap: 'nowrap', paddingBottom: 6 }}>
-            <button type="button" className={`btn btn-sm ${!inSlsh ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setInSlsh(false); setAmount(''); }}>USD</button>
-            <button type="button" className={`btn btn-sm ${inSlsh ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setInSlsh(true); setAmount(''); }}>SLSH</button>
-          </div>
-        )}
-        <button type="button" className="btn btn-primary" style={{ minHeight: 52, minWidth: 180 }} disabled={!ok || busy} onClick={save}>Record {usd > 0 ? money(usd) : ''}</button>
-      </div>
-      {usd > 0 && <p className="small" style={{ margin: 0 }}>= {money(usd)}{inSlsh ? '' : slsh(usd, rate) ? ` · ${slsh(usd, rate)}` : ''}</p>}
+      <div className="form-actions"><button type="button" className="btn btn-primary" style={{ minHeight: 52, minWidth: 220 }} disabled={!ok || busy} onClick={save}>Record {usd > 0 ? money(usd) : 'sale'}</button></div>
     </div>
   );
 }
+const num3 = (n: number) => Number(n.toFixed(3)).toLocaleString('en-US');
 
 function CloseShift({ s, methods, onClose, onDone }: { s: any; methods: { id: string; name: string }[]; onClose: () => void; onDone: (id: string) => void }) {
   const [note, setNote] = useState('');
@@ -336,7 +385,8 @@ export function FuelDashboard() {
   const sum = useLoad(() => get('/fuel/summary', { from: addDays(today, -6), to: today }), [today]);
   const dash = useLoad(() => get('/dashboard', { business: 'fuel' }), []);
   const cust = useLoad(() => get('/customers', { business: 'fuel' }), []);
-  const reload = () => { cur.reload(); sum.reload(); dash.reload(); cust.reload(); };
+  const stockList = useLoad(() => get('/fuel/items'), []);
+  const reload = () => { cur.reload(); sum.reload(); dash.reload(); cust.reload(); stockList.reload(); };
   usePolling(reload, 30000);
   if (!cur.data || !sum.data || !dash.data) return cur.error || sum.error || dash.error ? <ErrorBox error={cur.error || sum.error || dash.error} /> : <PageSkeleton />;
 
@@ -441,6 +491,28 @@ export function FuelDashboard() {
         </div>
       </div>
 
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel__header"><div><p>Last 7 days</p><h2>What sells</h2></div></div>
+          <div className="form-stack">
+            {S.by_item.map((p: any) => (
+              <div key={p.name}><div className="row row--between small"><span><strong>{p.name}</strong>{p.unit ? ` · ${num3(p.qty)} ${p.unit}` : ''}</span><span><strong>{money(p.amount)}</strong>{S.total.sold ? ` · ${Math.round((p.amount / S.total.sold) * 100)}%` : ''}</span></div>
+                <Bar value={p.amount} max={S.by_item[0]?.amount ?? 0} tone="#f59e0b" /></div>
+            ))}
+            {!S.by_item.length && <span className="muted">No sales yet.</span>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel__header"><div><p>Now</p><h2>Stock</h2></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/inventory'))}>Inventory →</button></div>
+          <div className="kv">
+            {(stockList.data ?? []).filter((i: any) => i.active && i.track_stock).slice(0, 8).map((i: any) => (
+              <Fragment key={i.id}><span>{i.name}</span><span style={{ color: i.stock_qty <= 0 || (i.reorder_level > 0 && i.stock_qty <= i.reorder_level) ? '#b91c1c' : undefined }}>{num3(i.stock_qty)} {i.unit}</span></Fragment>
+            ))}
+          </div>
+          {!(stockList.data ?? []).some((i: any) => i.active && i.track_stock) && <span className="muted">No items with tracked stock yet. Add them in Inventory.</span>}
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel__header"><div><p>Last 7 days</p><h2>Day by day</h2></div></div>
         <div className="table-wrap">
@@ -511,6 +583,14 @@ export function FuelReports() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="panel"><div className="panel__header"><div><p>By item</p><h2>What was sold</h2></div></div>
+            <div className="table-wrap"><table>
+              <thead><tr><th>Item</th><th className="num">Quantity</th><th className="num">Sales</th><th className="num">Share</th></tr></thead>
+              <tbody>{S.by_item.map((p: any) => <tr key={p.name}><td><strong>{p.name}</strong></td><td className="num">{p.unit ? `${num3(p.qty)} ${p.unit}` : '—'}</td><td className="num"><strong>{money(p.amount)}</strong></td><td className="num">{S.total.sold ? `${Math.round((p.amount / S.total.sold) * 100)}%` : '—'}</td></tr>)}
+                {!S.by_item.length && <tr><td colSpan={4} className="muted">No sales.</td></tr>}</tbody>
+            </table></div>
           </div>
 
           <div className="grid-2">

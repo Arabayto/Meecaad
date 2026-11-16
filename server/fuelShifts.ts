@@ -5,7 +5,7 @@
 //   money. The owner and managers see what is happening live, per salesman and
 //   per shift, with simple totals for decisions.
 
-import { HttpError, Tx, addDays, all, assertDayOpen, bad, bizScope, can, cents, first, idemKey, newId, nowIso, partyIn, paymentMethod, requireBiz, str, today, type Ctx } from './lib';
+import { HttpError, Tx, addDays, all, assertDayOpen, bad, bizScope, can, cents, first, idemKey, newId, nowIso, partyIn, paymentMethod, qty, requireBiz, round3, str, today, type Ctx } from './lib';
 
 const B = 'fuel';
 const EAT = 3 * 3600_000;   // Hargeisa time = UTC+3
@@ -101,8 +101,8 @@ function decorate(s: any, t: Totals | undefined, times: ShiftTime[]) {
 }
 
 async function salesOf(db: D1Database, shiftId: string) {
-  return all(db, `SELECT f.*, pm.name AS method_name, cu.name AS customer_name, u.full_name AS created_by_name, v.full_name AS voided_by_name
-    FROM duty_sales f LEFT JOIN payment_methods pm ON pm.id = f.method_id LEFT JOIN customers cu ON cu.id = f.customer_id
+  return all(db, `SELECT f.*, i.unit AS item_unit, pm.name AS method_name, cu.name AS customer_name, u.full_name AS created_by_name, v.full_name AS voided_by_name
+    FROM duty_sales f LEFT JOIN fuel_items i ON i.id = f.item_id LEFT JOIN payment_methods pm ON pm.id = f.method_id LEFT JOIN customers cu ON cu.id = f.customer_id
     JOIN users u ON u.id = f.created_by LEFT JOIN users v ON v.id = f.voided_by WHERE f.shift_id = ? ORDER BY f.created_at DESC`, shiftId);
 }
 
@@ -160,7 +160,7 @@ export async function openShift(ctx: Ctx) {
   }
 }
 
-/** One sale into my open shift: money collected by Cash / Zaad / Edahab, or a customer debt. Cash may be taken in Shillings. */
+/** One sale into my open shift: an item at the admin's price (by quantity or by amount), paid by Cash / Zaad / Edahab or put on a customer's debt. */
 export async function createSale(ctx: Ctx) {
   requireBiz(ctx, B, 'fuel');
   const b = ctx.body;
@@ -171,30 +171,53 @@ export async function createSale(ctx: Ctx) {
   const debt = Boolean(b.customer);
   const customer = debt ? await partyIn(ctx.db, 'customer', b.customer, B) : null;
   const method = debt ? null : await paymentMethod(ctx.db, b.method);
-  let amount: number, slshAmount: number | null = null, rate: number | null = null;
-  if (b.slsh !== undefined && b.slsh !== null && b.slsh !== '') {
-    if (method !== 'cash') throw bad('Only cash can be taken in Shillings');
-    rate = await currentRate(ctx.db);
-    if (!rate) throw bad('Set the exchange rate first (Settings)');
-    slshAmount = Math.round(Number(String(b.slsh).replace(/,/g, '')));
-    if (!Number.isFinite(slshAmount) || slshAmount <= 0) throw bad('Enter the amount in Shillings');
-    amount = Math.round((slshAmount / rate) * 100);
-    if (amount <= 0) throw bad('The amount is too small');
+  const rate = await currentRate(ctx.db);
+  let amount: number, slshAmount: number | null = null, item: any = null, itemQty = 0;
+  if (b.item) {
+    // The price is the admin's: the salesman only says what and how much (quantity, or an amount in the item's money).
+    item = await first<any>(ctx.db, 'SELECT * FROM fuel_items WHERE id = ? AND business_id = ? AND active = 1', String(b.item), B);
+    if (!item) throw bad('Choose what was sold');
+    let total: number;   // in the item's own money: cents (USD) or shillings (SLSH)
+    if (b.qty !== undefined && b.qty !== '' && b.qty !== null) {
+      itemQty = qty(b.qty, 'Quantity', { positive: true });
+      total = Math.round(itemQty * item.price);
+    } else {
+      total = item.currency === 'USD' ? cents(b.amount, 'Amount', { min: 1 }) : Math.round(Number(String(b.amount ?? '').replace(/,/g, '')));
+      if (!Number.isFinite(total) || total < 1) throw bad('Enter the quantity or the amount');
+      itemQty = round3(total / item.price);
+    }
+    if (total < 1) throw bad('The amount is too small');
+    if (item.currency === 'USD') {
+      amount = total;
+      slshAmount = rate ? Math.round((total / 100) * rate) : null;
+    } else {
+      if (!rate) throw bad('This item is priced in Shillings. Set the exchange rate first (Settings).');
+      slshAmount = total;
+      amount = Math.round((total / rate) * 100);
+      if (amount < 1) throw bad('The amount is too small');
+    }
   } else {
+    // Until the manager adds items in Inventory, a sale can still be an amount (US dollars).
+    if (await first(ctx.db, `SELECT id FROM fuel_items WHERE business_id = ? AND active = 1 LIMIT 1`, B)) throw bad('Choose what was sold');
     amount = cents(b.amount, 'Amount', { min: 1 });
   }
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`INSERT INTO duty_sales (id, shift_id, business_id, entry_date, amount, method_id, customer_id, slsh_amount, rate, note, created_by, created_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-    id, shift.id, B, date, amount, method, customer?.id ?? null, slshAmount, rate, str(b.note, 'Note', { max: 200 }), ctx.user.id, nowIso());
+  tx.run(`INSERT INTO duty_sales (id, shift_id, business_id, entry_date, amount, method_id, customer_id, slsh_amount, rate, note, item_id, item_name, qty, unit_price, price_currency, created_by, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    id, shift.id, B, date, amount, method, customer?.id ?? null, slshAmount, rate, str(b.note, 'Note', { max: 200 }),
+    item?.id ?? null, item?.name ?? null, item ? itemQty : null, item?.price ?? null, item?.currency ?? null, ctx.user.id, nowIso());
+  if (item?.track_stock) {
+    tx.run('UPDATE fuel_items SET stock_qty = ROUND(stock_qty - ?, 3) WHERE id = ?', itemQty, item.id);
+    tx.run(`INSERT INTO fuel_stock_log (id, item_id, entry_date, type, qty, ref_id, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)`, newId(), item.id, date, 'sale', -itemQty!, id, ctx.user.id, nowIso());
+  }
   tx.journal({ business: B, date, type: 'fuel_sale', refType: 'fuel_sale', refId: id, amount,
-    memo: `Fuel sale (${shift.shift_name} shift #${shift.number})${customer ? ` on credit to ${customer.name}` : ''}` }, [
+    memo: `Fuel sale${item ? `: ${itemQty} ${item.unit} ${item.name}` : ''} (${shift.shift_name} shift #${shift.number})${customer ? ` on credit to ${customer.name}` : ''}` }, [
     { account: 'sales', amount: -amount },
     debt ? { account: 'receivable', amount, customer: customer!.id } : { account: 'cash', amount, method },
   ]);
-  tx.audit('create', 'fuel_sale', id, B, { amount, method, customer: customer?.name, slsh: slshAmount });
-  return tx.commit(idemKey(ctx), { id, amount });
+  tx.audit('create', 'fuel_sale', id, B, { amount, method, customer: customer?.name, item: item?.name, qty: itemQty, slsh: slshAmount });
+  return tx.commit(idemKey(ctx), { id, amount, qty: itemQty, slsh: slshAmount });
 }
 
 /** A wrong sale is cancelled by a manager or the owner, with a reason (the money is reversed). */
@@ -208,6 +231,11 @@ export async function voidSale(ctx: Ctx) {
   await assertDayOpen(ctx.db, B, date);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE duty_sales SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), s.id);
+  const sold = s.item_id ? await first<any>(ctx.db, 'SELECT track_stock FROM fuel_items WHERE id = ?', s.item_id) : null;
+  if (sold?.track_stock) {
+    tx.run('UPDATE fuel_items SET stock_qty = ROUND(stock_qty + ?, 3) WHERE id = ?', s.qty, s.item_id);
+    tx.run(`INSERT INTO fuel_stock_log (id, item_id, entry_date, type, qty, ref_id, reason, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)`, newId(), s.item_id, date, 'sale_void', s.qty, s.id, reason, ctx.user.id, nowIso());
+  }
   await tx.reverse('fuel_sale', s.id, date, 'fuel_sale_void', `Cancelled fuel sale: ${reason}`);
   tx.audit('void', 'fuel_sale', s.id, B, { reason, amount: s.amount });
   return tx.commit(idemKey(ctx), { id: s.id });
@@ -268,7 +296,7 @@ export async function summary(ctx: Ctx) {
   const to = ctx.url.searchParams.get('to') || today();
   const span = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
   const pFrom = addDays(from, -span), pTo = addDays(from, -1);
-  const [days, people, byShift, methods, shifts, prev, prevShifts, rates] = await Promise.all([
+  const [days, people, byShift, methods, shifts, prev, prevShifts, rates, byItem] = await Promise.all([
     all<any>(ctx.db, `SELECT entry_date, method_id, COUNT(*) AS n, SUM(amount) AS amount FROM duty_sales WHERE business_id = ? AND status = 'completed' AND entry_date BETWEEN ? AND ?
       GROUP BY entry_date, method_id`, B, from, to),
     all<any>(ctx.db, `SELECT s.user_id, u.full_name AS name, f.method_id, COUNT(*) AS n, SUM(f.amount) AS amount FROM duty_sales f JOIN duty_shifts s ON s.id = f.shift_id JOIN users u ON u.id = s.user_id
@@ -281,6 +309,8 @@ export async function summary(ctx: Ctx) {
       WHERE business_id = ? AND status = 'completed' AND entry_date BETWEEN ? AND ?`, B, pFrom, pTo),
     first<any>(ctx.db, `SELECT COUNT(*) AS n FROM duty_shifts WHERE business_id = ? AND entry_date BETWEEN ? AND ?`, B, pFrom, pTo),
     all(ctx.db, 'SELECT rate_date, rate, set_at FROM exchange_rates WHERE rate_date <= ?', to),
+    all<any>(ctx.db, `SELECT COALESCE(f.item_name, 'Other (no item)') AS name, i.unit, COUNT(*) AS n, ROUND(COALESCE(SUM(f.qty), 0), 3) AS qty, SUM(f.amount) AS amount FROM duty_sales f LEFT JOIN fuel_items i ON i.id = f.item_id
+      WHERE f.business_id = ? AND f.status = 'completed' AND f.entry_date BETWEEN ? AND ? GROUP BY COALESCE(f.item_name, 'Other (no item)') ORDER BY amount DESC`, B, from, to),
   ]);
   // Group rows (one per method, debts under method_id = null) into { sold, debts, by_method, count }.
   const fold = (rows: any[], key: (r: any) => string) => {
@@ -299,7 +329,7 @@ export async function summary(ctx: Ctx) {
   const sum = (rows: any[]) => rows.reduce((t, r) => t + r.amount, 0);
   const debts = sum(days.filter((r) => !r.method_id));
   return {
-    from, to, methods, rates, shifts: shifts.length,
+    from, to, methods, rates, by_item: byItem, shifts: shifts.length,
     total: { sold: sum(days), debts, count: days.reduce((t, r) => t + r.n, 0) },
     previous: { from: pFrom, to: pTo, sold: prev?.sold ?? 0, debts: prev?.debts ?? 0, shifts: prevShifts?.n ?? 0 },
     days: fold(days, (r) => r.entry_date).map((d) => ({ ...d, date: d.key, shifts: shifts.filter((s) => s.entry_date === d.key).length })).sort((a, b) => (a.date < b.date ? 1 : -1)),

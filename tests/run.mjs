@@ -583,14 +583,13 @@ try {
     const sh2 = await fc2.post('/fuel/open', { shiftName: 'Night' });   // two salesmen work at the same time
     assert.equal((await fc.get('/fuel/current')).mine.shift_name, sh.name);
 
-    // Money collected: cash, Zaad, Edahab, cash in Shillings at the day's rate, and a customer debt.
+    // Money collected (before items exist: a plain amount): cash, Zaad, Edahab, and a customer debt.
     const revBefore = (await owner.get('/dashboard?business=fuel')).figures.today.fuel.revenue;
     await fc.post('/fuel/sales', { method: 'cash', amount: 80000 });
     const z = await fc.post('/fuel/sales', { method: 'zaad', amount: 20000 });
     await fc.post('/fuel/sales', { method: 'edahab', amount: 10000 });
-    const sl = await fc.post('/fuel/sales', { method: 'cash', slsh: '1,190,000' });   // 1,190,000 ÷ 11,900 = $100.00
+    const sl = await fc.post('/fuel/sales', { method: 'cash', amount: 10000 });   // before items exist, a sale can be a plain amount
     assert.equal(sl.amount, 10000);
-    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'zaad', slsh: 50000 })).status, 400, 'only cash in Shillings');
     assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 0 })).status, 400);
     assert.equal((await fc.call('POST', '/fuel/sales', { customer: 'not-a-customer', amount: 100 })).status, 400, 'the customer must exist');
     await fc.post('/fuel/sales', { customer, amount: 10000 });
@@ -651,6 +650,66 @@ try {
     await fm.post('/fuel/shift-times', { times: [{ name: 'Morning', start: '06:00', end: '14:00' }, { name: 'Evening', start: '14:00', end: '22:00' }, { name: 'Night', start: '22:00', end: '06:00' }] });
   });
 
+  await step('fuel inventory: the admin sets prices in $ or SLSH, sales use them, stock follows every sale', async () => {
+    const fc = client(), fm = client();
+    await fc.post('/auth/login', { username: 'fuelc', password: 'pump-key-321' });
+    await fm.post('/auth/login', { username: 'fuelm', password: 'boss-key-654' });
+    // Only the manager / owner sets items and prices.
+    assert.equal((await fc.call('POST', '/fuel/items', { name: 'Hack', price: 100, currency: 'USD' })).status, 403);
+    for (const bad of [{ name: '', price: 100 }, { name: 'X', price: 0 }, { name: 'X', price: 100, currency: 'EUR' }, { name: 'X', price: 'abc', currency: 'SLSH' }]) assert.equal((await fm.call('POST', '/fuel/items', bad)).status, 400);
+    const diesel = (await fm.post('/fuel/items', { name: 'Diesel', category: 'Fuel', unit: 'L', currency: 'USD', price: 120, openingQty: 1000, reorderLevel: 100 })).id;   // $1.20 per litre
+    const petrol = (await fm.post('/fuel/items', { name: 'Petrol', category: 'Fuel', unit: 'L', currency: 'SLSH', price: 15000 })).id;          // 15,000 SLSH per litre
+    const oil = (await fm.post('/fuel/items', { name: 'Engine oil', category: 'Oil', unit: 'pcs', currency: 'USD', price: 800, openingQty: 10 })).id;
+    assert.equal((await fm.call('POST', '/fuel/items', { name: 'DIESEL', price: 1, currency: 'USD' })).status, 409, 'names are unique');
+    assert.equal((await fc.get('/fuel/items')).length, 3, 'salesmen see the items and prices');
+    await fc.post('/fuel/open', {});
+    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 100 })).status, 400, 'once items exist a sale must say what was sold');
+    assert.equal((await fc.call('POST', '/fuel/sales', { item: 'nope', qty: 1, method: 'cash' })).status, 400);
+    assert.equal((await fc.call('POST', '/fuel/sales', { item: diesel, qty: 0, method: 'cash' })).status, 400);
+    // By quantity (the admin's price), by amount, and an item priced in Shillings (converted at the day's rate 11,900).
+    const s1 = await fc.post('/fuel/sales', { item: diesel, qty: 10, method: 'cash' });
+    assert.deepEqual([s1.amount, s1.qty, s1.slsh], [1200, 10, 142800]);
+    const s2 = await fc.post('/fuel/sales', { item: diesel, amount: 2400, method: 'zaad' });
+    assert.deepEqual([s2.amount, s2.qty], [2400, 20]);
+    const s3 = await fc.post('/fuel/sales', { item: petrol, qty: 2, method: 'edahab' });
+    assert.deepEqual([s3.amount, s3.slsh], [252, 30000]);                       // 30,000 SLSH ÷ 11,900 = $2.52
+    const s4 = await fc.post('/fuel/sales', { item: petrol, amount: 14280, method: 'cash' });
+    assert.deepEqual([s4.amount, s4.qty], [120, 0.952]);
+    await fc.post('/fuel/sales', { item: oil, qty: 1, customer });               // a debt for an item
+    const stock = async () => Object.fromEntries((await fm.get('/fuel/items')).map((i) => [i.name, i.stock_qty]));
+    assert.deepEqual(await stock(), { Diesel: 970, 'Engine oil': 9, Petrol: -2.952 }, 'stock follows each sale (selling is never blocked)');
+    assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /Petrol stock is below zero/.test(a.title)));
+    // The price is the admin's. A change applies to new sales only.
+    await fm.ok('PATCH', `/fuel/items/${diesel}`, { price: 140 });
+    const s5 = await fc.post('/fuel/sales', { item: diesel, qty: 1, method: 'cash' });
+    assert.equal(s5.amount, 140);
+    // Cancelling a sale puts the stock back.
+    await fm.post(`/fuel/sales/${s1.id}/void`, { reason: 'Wrong item' });
+    assert.equal((await stock()).Diesel, 970 - 1 + 10);
+    // Deliveries and counts, with a history.
+    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'received', qty: 5 })).status, 403);
+    await fm.post(`/fuel/items/${diesel}/stock`, { type: 'received', qty: 500, reason: 'Delivery' });
+    assert.equal((await fm.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400 })).status, 400, 'a difference needs a reason');
+    await fm.post(`/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'Evaporation' });
+    assert.equal((await stock()).Diesel, 1400);
+    assert.equal((await fm.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'again' })).status, 400, 'nothing to change');
+    const hist = await fm.get(`/fuel/items/${diesel}/log`);
+    assert.deepEqual(hist.map((h) => h.type).reverse(), ['received', 'sale', 'sale', 'sale', 'sale_void', 'received', 'count']);
+    // Numbers: per item, and the old sale kept its price.
+    const sm = await fm.get(`/fuel/summary?from=${today}&to=${today}`);
+    const dsl = sm.by_item.find((x) => x.name === 'Diesel');
+    assert.deepEqual([dsl.qty, dsl.amount], [21, 2540]);
+    assert.ok(sm.by_item.find((x) => x.name === 'Engine oil').amount === 800);
+    const shiftId = (await fc.get('/fuel/current')).mine.id;
+    assert.equal((await fm.get(`/fuel/sessions/${shiftId}`)).sales.find((x) => x.id === s2.id).unit_price, 120, 'the price at the time of the sale is kept');
+    // A hidden item cannot be sold; salesmen no longer see it.
+    await fm.ok('PATCH', `/fuel/items/${oil}`, { active: false });
+    assert.equal((await fc.call('POST', '/fuel/sales', { item: oil, qty: 1, method: 'cash' })).status, 400);
+    assert.equal((await fc.get('/fuel/items')).length, 2);
+    assert.equal((await fm.get('/fuel/items')).length, 3);
+    await fc.post('/fuel/close', {});
+  });
+
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
     assert.deepEqual(sql('SELECT entry_id, SUM(amount) s FROM journal_lines GROUP BY entry_id HAVING s <> 0'), []);
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);
@@ -675,6 +734,7 @@ try {
     let blocked = false;
     try { sql('DELETE FROM journal_lines'); } catch { blocked = true; }
     assert.ok(blocked, 'journal is append-only');
+    assert.deepEqual(sql(`SELECT i.id FROM fuel_items i WHERE ABS(i.stock_qty - (SELECT COALESCE(SUM(qty), 0) FROM fuel_stock_log l WHERE l.item_id = i.id)) > 0.001`), [], 'fuel stock = its log');
     assert.ok(sql('SELECT COUNT(*) n FROM audit_log')[0].n > 20);
     assert.match(wrangler('d1', 'migrations', 'list', 'meecaad', '--local', '--persist-to', persist), /No migrations to apply/, 'auto-setup is recorded for wrangler');
   });

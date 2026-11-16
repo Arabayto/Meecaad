@@ -10,6 +10,7 @@ import * as rep from '../../server/reports';
 import * as rest from '../../server/restaurant';
 import * as shifts from '../../server/shifts';
 import * as fuelShifts from '../../server/fuelShifts';
+import * as fuelItems from '../../server/fuelItems';
 import { ensureSchema } from '../../server/migrate';
 import { metered } from '../../server/metered';
 import { BUSINESSES, HttpError, all, can, today, type Ctx, type Env, type Perm } from '../../server/lib';
@@ -77,6 +78,11 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/fuel/sessions', fuelShifts.listShifts, ''],
   ['GET', '/fuel/sessions/:id', fuelShifts.getShift, ''],
   ['GET', '/fuel/summary', fuelShifts.summary, ''],
+  ['GET', '/fuel/items', fuelItems.listItems, ''],
+  ['POST', '/fuel/items', fuelItems.createItem, ''],
+  ['PATCH', '/fuel/items/:id', fuelItems.updateItem, ''],
+  ['POST', '/fuel/items/:id/stock', fuelItems.changeStock, ''],
+  ['GET', '/fuel/items/:id/log', fuelItems.stockLog, ''],
   ['GET', '/fuel/shift-times', fuelShifts.getShiftTimes, ''],
   ['POST', '/fuel/shift-times', fuelShifts.setShiftTimes, ''],
   ['GET', '/rates', fuel.getRates, ''],

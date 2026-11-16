@@ -198,3 +198,10 @@
 /* Small horizontal bar under a number (shares, per-day sales) */
 .bar { height: 7px; border-radius: 99px; background: var(--border); overflow: hidden; margin-top: 4px; min-width: 60px; }
 .bar > span { display: block; height: 100%; border-radius: 99px; }
+
+/* Item buttons on the fuel Sales screen */
+.item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.item-tile { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); cursor: pointer; font: inherit; color: inherit; min-height: 56px; }
+.item-tile span { font-size: 12px; color: var(--text-muted); }
+.item-tile:hover { border-color: var(--primary); }
+.item-tile--on { border-color: var(--primary); background: var(--primary-light, #e8f5e8); box-shadow: 0 0 0 2px rgba(11,143,8,0.15); }

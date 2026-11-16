@@ -6,6 +6,7 @@ import {
   type Ctx,
 } from './lib';
 import { shiftAlerts } from './fuelShifts';
+import { itemAlerts } from './fuelItems';
 
 const PNL_ACCOUNTS = ['sales', 'cogs', 'expense', 'stock_loss', 'cash_diff'];
 
@@ -136,6 +137,7 @@ async function buildAlerts(db: D1Database, scope: string[]) {
   if (scope.includes('fuel')) {
     // Salesmen's shifts still open after their time (or since an earlier day).
     for (const x of await shiftAlerts(db, t)) alerts.push({ ...x, business: 'fuel', link: '/shifts' });
+    for (const x of await itemAlerts(db)) alerts.push({ ...x, business: 'fuel', link: '/inventory' });
   }
   for (const r of await all<any>(db, `SELECT * FROM daily_closings WHERE status = 'closed' AND total_difference <> 0 AND entry_date >= ? AND business_id IN (${p}) ORDER BY entry_date DESC`, addDays(t, -7), ...scope)) {
     alerts.push({ level: r.total_difference < 0 ? 'red' : 'yellow', business: r.business_id, title: `Cash ${r.total_difference < 0 ? 'short' : 'over'} ${money(Math.abs(r.total_difference))} at closing`,
