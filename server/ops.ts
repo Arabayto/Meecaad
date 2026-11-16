@@ -365,13 +365,16 @@ export async function voidExpense(ctx: Ctx) {
   return tx.commit(idemKey(ctx), { id: e.id });
 }
 
-// ── Money movements ─────────────────────────────────────────────
-const MOVEMENT_PERM = { customer_payment: 'sell', supplier_payment: 'purchase', transfer: 'money', owner_in: 'money', owner_out: 'money' } as const;
+// ── Payments of debts ───────────────────────────────────────────
+// Money moves in two ways only: a customer pays what they owe, or we pay a supplier.
+// (Transfers between businesses and owner money in/out no longer exist; old ones stay in
+// the books and can still be seen and cancelled.)
+const MOVEMENT_PERM = { customer_payment: 'sell', supplier_payment: 'purchase' } as const;
 
 export async function createMovement(ctx: Ctx) {
   const b = ctx.body;
   const type = String(b.type) as keyof typeof MOVEMENT_PERM;
-  if (!MOVEMENT_PERM[type]) throw bad('Unknown money movement');
+  if (!MOVEMENT_PERM[type]) throw bad('Only debt payments can be recorded here: a customer paying, or a supplier being paid');
   // At the fuel station, debts are collected by the fuel staff (there is no till there).
   const business = requireBiz(ctx, b.business, type === 'customer_payment' && b.business === 'fuel' ? 'fuel' : MOVEMENT_PERM[type]);
   const date = entryDate(b.date);
@@ -383,7 +386,7 @@ export async function createMovement(ctx: Ctx) {
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
   const head = { business, date, type, refType: 'money', refId: id, amount };
-  let customer = null, supplier = null, toBusiness = null, toMethod = null;
+  let customer = null, supplier = null;
 
   if (type === 'customer_payment') {
     customer = await partyIn(ctx.db, 'customer', b.customer, business);
@@ -392,48 +395,19 @@ export async function createMovement(ctx: Ctx) {
     if (amount > owed) throw bad(`${customer.name} owes only ${(owed / 100).toFixed(2)} to this business`);
     tx.journal({ ...head, memo: `Debt payment from ${customer.name}${note ? ` — ${note}` : ''}` },
       [{ account: 'cash', amount, method }, { account: 'receivable', amount: -amount, customer: customer.id }]);
-  } else if (type === 'supplier_payment') {
+  } else {
     supplier = await partyIn(ctx.db, 'supplier', b.supplier, business);
     if (!supplier) throw bad('Choose the supplier');
     const owed = await supplierBalance(ctx.db, business, supplier.id);
     if (amount > owed) throw bad(`This business owes ${supplier.name} only ${(owed / 100).toFixed(2)}`);
     tx.journal({ ...head, memo: `Payment to supplier ${supplier.name}${note ? ` — ${note}` : ''}` },
       [{ account: 'payable', amount, supplier: supplier.id }, { account: 'cash', amount: -amount, method }]);
-  } else if (type === 'transfer') {
-    toBusiness = String(b.toBusiness ?? business);
-    if (!ctx.user.businesses.includes(toBusiness)) throw new HttpError(403, 'You do not have access to the receiving business');
-    toMethod = await paymentMethod(ctx.db, b.toMethod, 'Receiving account');
-    if (toBusiness === business && toMethod === method) throw bad('Choose a different receiving account');
-    const memo = `Transfer ${method} (${business}) → ${toMethod} (${toBusiness})${note ? ` — ${note}` : ''}`;
-    if (toBusiness === business) {
-      tx.journal({ ...head, memo }, [{ account: 'cash', amount, method: toMethod }, { account: 'cash', amount: -amount, method }]);
-    } else {
-      tx.journal({ ...head, memo }, [{ account: 'transfer', amount, category: toBusiness }, { account: 'cash', amount: -amount, method }]);
-      tx.journal({ ...head, business: toBusiness, memo }, [{ account: 'cash', amount, method: toMethod }, { account: 'transfer', amount: -amount, category: business }]);
-    }
-  } else if (type === 'owner_in') {
-    tx.journal({ ...head, memo: `Owner added money${note ? ` — ${note}` : ''}` }, [{ account: 'cash', amount, method }, { account: 'owner', amount: -amount }]);
-  } else {
-    tx.journal({ ...head, memo: `Owner took money${note ? ` — ${note}` : ''}` }, [{ account: 'owner', amount }, { account: 'cash', amount: -amount, method }]);
   }
-  if (toBusiness && toBusiness !== business) await assertDayOpen(ctx.db, toBusiness, date);
-  tx.run(`INSERT INTO money_movements (id, type, entry_date, business_id, method_id, to_business_id, to_method_id, customer_id, supplier_id, amount, note, created_by, created_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    id, type, date, business, method, toBusiness, toMethod, customer?.id, supplier?.id, amount, note, ctx.user.id, nowIso());
-  tx.audit('create', type, id, business, { amount, method, toBusiness, toMethod });
+  tx.run(`INSERT INTO money_movements (id, type, entry_date, business_id, method_id, customer_id, supplier_id, amount, note, created_by, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    id, type, date, business, method, customer?.id, supplier?.id, amount, note, ctx.user.id, nowIso());
+  tx.audit('create', type, id, business, { amount, method });
   return tx.commit(idemKey(ctx), { id });
-}
-
-export async function listMovements(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'money');
-  const { from, to } = dateRange(ctx);
-  const type = ctx.url.searchParams.get('type');
-  return all(ctx.db,
-    `SELECT m.*, pm.name AS method_name, tm.name AS to_method_name, c.name AS customer_name, s.name AS supplier_name, u.full_name AS created_by_name
-     FROM money_movements m JOIN payment_methods pm ON pm.id = m.method_id LEFT JOIN payment_methods tm ON tm.id = m.to_method_id
-     LEFT JOIN customers c ON c.id = m.customer_id LEFT JOIN suppliers s ON s.id = m.supplier_id JOIN users u ON u.id = m.created_by
-     WHERE m.entry_date BETWEEN ? AND ? AND (m.business_id IN (${placeholders(scope)}) OR m.to_business_id IN (${placeholders(scope)})) ${type ? 'AND m.type = ?' : ''}
-     ORDER BY m.created_at DESC LIMIT 500`, from, to, ...scope, ...scope, ...(type ? [type] : []));
 }
 
 export async function voidMovement(ctx: Ctx) {

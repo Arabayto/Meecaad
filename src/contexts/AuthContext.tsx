@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { clearPageCache, get, post, setUnauthorizedHandler } from '../api';
 
-export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'money' | 'reports' | 'users';
+export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'reports' | 'users';
 export type BizRole = 'manager' | 'cashier' | 'staff';
 export type PortalId = 'restaurant' | 'store' | 'fuel' | 'admin';
 export interface User { id: string; username: string; full_name: string; role: string; owner: boolean; businesses: string[]; roles: Record<string, BizRole | 'owner'> }
@@ -10,14 +10,14 @@ export interface Method { id: string; name: string; active: number }
 
 // Mirrors server/lib.ts BUSINESS_FEATURES and BIZ_ROLE_PERMS (the server enforces; this only hides what cannot be used).
 export const BUSINESS_FEATURES: Record<string, Perm[]> = {
-  restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
-  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
-  fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
+  restaurant: ['sell', 'expense', 'void', 'catalog', 'reports', 'users'],
+  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports', 'users'],
+  fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports', 'users'],
 };
 export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
     restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
-    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports'],
   },
   cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel'] },

@@ -157,7 +157,6 @@ export function DashboardPage() {
 
           <div className="panel__header" style={{ marginTop: 20 }}>
             <div><p>Where the money is</p><h2>Cash and mobile money balances</h2></div>
-            {business !== 'restaurant' && <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/money'))}>Open accounts</button>}
           </div>
           <div className="table-wrap">
             <table>

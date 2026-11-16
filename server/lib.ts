@@ -5,7 +5,7 @@ export interface Env { DB: D1Database }
 
 export type Role = 'owner' | 'manager' | 'cashier' | 'restaurant_staff' | 'fuel_staff' | 'store_staff';   // users.role (owner flag + history)
 export type BizRole = 'manager' | 'cashier' | 'staff';                                                        // role inside one business
-export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'money' | 'reports' | 'users';
+export type Perm = 'sell' | 'stock' | 'fuel' | 'purchase' | 'expense' | 'close' | 'void' | 'catalog' | 'reports' | 'users';
 
 export interface User {
   id: string;
@@ -38,21 +38,21 @@ export const BUSINESSES = ['restaurant', 'fuel', 'store'];
  * What each business does at all — this limits everyone, the owner included.
  * The restaurant is kept simple: orders, menu, sales, expenses, customers and
  * reports (no stock, purchases, suppliers or daily closing). Its money can
- * still be moved by the owner from the owner admin ('money').
+ * (There are no transfers between businesses and no owner money in/out any more.)
  * The fuel station has no till; its sales are pump readings, accounted for as cash / Zaad / Edahab / debts
  * (no separate daily closing and no money page there: the owner moves its money from the owner admin).
  */
 export const BUSINESS_FEATURES: Record<string, Perm[]> = {
-  restaurant: ['sell', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
-  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports', 'users'],
-  fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'money', 'reports', 'users'],
+  restaurant: ['sell', 'expense', 'void', 'catalog', 'reports', 'users'],
+  store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports', 'users'],
+  fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports', 'users'],
 };
 
 /** What each role may do, per business. */
 export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
   manager: {
     restaurant: ['sell', 'expense', 'void', 'catalog', 'reports'],
-    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'money', 'reports'],
+    store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports'],
   },
   cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel'] },   // restaurant cashiers pay small expenses from the drawer

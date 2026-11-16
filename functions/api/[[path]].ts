@@ -60,7 +60,6 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['POST', '/expenses', ops.createExpense, ''],
   ['POST', '/expenses/batch', ops.createExpenses, ''],
   ['POST', '/expenses/:id/void', ops.voidExpense, ''],
-  ['GET', '/money', ops.listMovements, ''],
   ['POST', '/money', ops.createMovement, ''],
   ['POST', '/money/:id/void', ops.voidMovement, ''],
 
@@ -107,7 +106,6 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/reports/summary', rep.summary, 'reports'],
   ['GET', '/reports/ledger', rep.ledger, 'reports'],
   ['GET', '/reports/entries/:id', rep.entryLines, 'reports'],
-  ['GET', '/balances', rep.balances, ''],
   ['GET', '/shifts/mine', shifts.myShift, ''],
   ['POST', '/shifts/close', shifts.closeShift, ''],
   ['GET', '/shifts/open', shifts.openShifts, ''],

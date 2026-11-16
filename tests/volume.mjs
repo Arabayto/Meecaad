@@ -65,7 +65,6 @@ async function main() {
   for (const [i, f] of fuels.entries()) tanks.push((await post('/fuel/tanks', { product: f, name: `Tank ${i + 1}`, capacity: 40000, openingQty: 30000, openingCost: 90, date: start })).id);
   const pumps = [];
   for (let i = 0; i < 4; i++) pumps.push({ id: (await post('/fuel/pumps', { tank: tanks[i % 2], name: `Pump ${i + 1}`, meter: 10000 })).id, meter: 10000, tank: i % 2 });
-  await post('/money', { type: 'owner_in', business: 'store', method: 'cash', amount: 1000000, date: start });
 
   const methods = ['cash', 'cash', 'cash', 'zaad', 'zaad', 'edahab'];
   for (let back = DAYS - 1; back >= 1; back--) {

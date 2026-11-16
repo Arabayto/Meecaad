@@ -14,7 +14,6 @@ import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { PartiesPage } from './pages/PartiesPage';
-import { MoneyPage } from './pages/MoneyPage';
 import { FuelInventory } from './pages/FuelInventory';
 import { FuelDashboard, FuelReports, FuelSalesPage, FuelSettings, FuelShiftsPage } from './pages/FuelStation';
 import { ClosingPage } from './pages/ClosingPage';
@@ -116,7 +115,6 @@ function PortalPage() {
     expenses: [['expense'], <ExpensesPage />],
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     suppliers: [['purchase'], <PartiesPage kind="suppliers" />],
-    money: [['money'], <MoneyPage />],
     closing: [['close'], <ClosingPage />],
     reports: [['reports'], <ReportsPage />],
   } as Record<string, [Perm[], JSX.Element]>;

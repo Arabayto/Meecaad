@@ -252,21 +252,6 @@ export async function entryLines(ctx: Ctx) {
   return { ...e, lines };
 }
 
-/** Owner/manager overview of what is owed both ways, per business. */
-export async function balances(ctx: Ctx) {
-  const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'money');
-  const p = placeholders(scope);
-  const [cash, customers, suppliers] = await Promise.all([
-    all(ctx.db, `SELECT b.business_id, b.method_id, pm.name AS method_name, b.balance FROM account_balances b JOIN payment_methods pm ON pm.id = b.method_id
-                 WHERE b.account = 'cash' AND b.business_id IN (${p}) ORDER BY b.business_id, pm.sort`, ...scope),
-    all(ctx.db, `SELECT b.business_id, c.id, c.name, c.phone, b.balance FROM account_balances b JOIN customers c ON c.id = b.customer_id
-                 WHERE b.account = 'receivable' AND b.business_id IN (${p}) AND b.balance <> 0 ORDER BY b.balance DESC`, ...scope),
-    all(ctx.db, `SELECT b.business_id, s.id, s.name, s.phone, -b.balance AS balance FROM account_balances b JOIN suppliers s ON s.id = b.supplier_id
-                 WHERE b.account = 'payable' AND b.business_id IN (${p}) AND b.balance <> 0 ORDER BY b.balance`, ...scope),
-  ]);
-  return { cash, customers, suppliers };
-}
-
 // ── Daily closing ───────────────────────────────────────────────
 export async function closingPreview(ctx: Ctx) {
   const business = requireBiz(ctx, ctx.url.searchParams.get('business'), 'close');

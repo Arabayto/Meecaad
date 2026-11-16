@@ -4,11 +4,11 @@ import { get, money, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
-import { BizTag, ErrorBox, Field, Money, MoneyInput, PageHeader, addDays, useLoad, useSubmit } from '../components/ui';
+import { BizTag, ErrorBox, Field, Money, MoneyInput, PageHeader, ReasonModal, addDays, useLoad, useSubmit } from '../components/ui';
 
 /** Customers (what they owe us) or suppliers (what we owe them), per business. */
 export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
-  const { business, businessName, can, today } = useAuth();
+  const { business, businessName, can, canIn, today } = useAuth();
   const isCustomers = kind === 'customers';
   // A portal shows only its own business's people; the owner admin sees everyone.
   const admin = !business;
@@ -20,6 +20,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
   const [edit, setEdit] = useState<any>(null);
   const [paying, setPaying] = useState<any>(null);
   const [statement, setStatement] = useState<any>(null);
+  const [cancelPay, setCancelPay] = useState<any>(null);
 
   const rows = (list.data ?? []).filter((c: any) => (showAll || c.balance !== 0 || search) && (!search || `${c.name} ${c.phone ?? ''}`.toLowerCase().includes(search.toLowerCase())));
   const total = (list.data ?? []).reduce((s: number, c: any) => s + c.balance, 0);
@@ -83,22 +84,30 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
             <p className="muted small">{scope === 'all' ? 'All businesses' : businessName(business)} · balance {money(statement.balance)} {isCustomers ? 'owed to us' : 'we owe'}</p>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Date</th><th>Business</th><th>Details</th><th className="num">{isCustomers ? 'Credit given' : 'Bought on credit'}</th><th className="num">Paid / returned</th><th className="num">Balance</th></tr></thead>
+                <thead><tr><th>Date</th><th>Business</th><th>Details</th><th className="num">{isCustomers ? 'Credit given' : 'Bought on credit'}</th><th className="num">Paid / returned</th><th className="num">Balance</th><th></th></tr></thead>
                 <tbody>
                   {statement.lines.map((l: any, i: number) => (
                     <tr key={i}>
                       <td className="small">{l.entry_date}</td><td><BizTag id={l.business_id} /></td><td className="small">{l.memo}</td>
                       <td className="num">{l.amount > 0 ? money(l.amount) : ''}</td><td className="num">{l.amount < 0 ? money(-l.amount) : ''}</td>
                       <td className="num"><strong>{money(l.balance)}</strong></td>
+                      <td className="no-print">{/* a payment recorded by mistake can be cancelled (reason required) */}
+                        {l.ref_type === 'money' && /_payment$/.test(l.type) && canIn('void', l.business_id) && !statement.lines.some((x: any) => x.ref_id === l.ref_id && x.type.endsWith('_void')) && (
+                          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCancelPay(l)}>Cancel payment</button>
+                        )}
+                      </td>
                     </tr>
                   ))}
-                  {!statement.lines.length && <tr><td colSpan={6} className="muted">No transactions.</td></tr>}
+                  {!statement.lines.length && <tr><td colSpan={7} className="muted">No transactions.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
         )}
       </Modal>
+      {cancelPay && <ReasonModal open onClose={() => setCancelPay(null)} title="Cancel this payment?" action={`/money/${cancelPay.ref_id}/void`} confirmLabel="Cancel payment"
+        message={<>{money(-cancelPay.amount)} on {cancelPay.entry_date}. The money is taken back out and the debt comes back.</>}
+        onDone={() => { setCancelPay(null); setStatement(null); list.reload(); }} />}
     </div>
   );
 }

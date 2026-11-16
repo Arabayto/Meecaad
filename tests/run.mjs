@@ -94,7 +94,6 @@ try {
     rice = (await owner.post('/products', { business: 'store', name: 'Rice 25kg', kind: 'item', salePrice: 2500, openingQty: 10, openingCost: 2000, reorderLevel: 3 })).id;
     tea = (await owner.post('/products', { business: 'restaurant', name: 'Tea', kind: 'menu', salePrice: 50 })).id;
     assert.equal((await owner.call('POST', '/products', { business: 'store', name: 'Bad', kind: 'fuel' })).status, 400);
-    await owner.post('/money', { type: 'owner_in', business: 'store', method: 'cash', amount: 20000, note: 'Opening cash' });
   });
 
   await step('store: normal cash sale (with idempotent retry)', async () => {
@@ -186,10 +185,8 @@ try {
     assert.equal(await countExp(), n0 + 2);
     for (const id of saved.ids) await owner.post(`/expenses/${id}/void`, { reason: 'test batch' });
     await owner.post('/expenses', { business: 'restaurant', category: 'Gas', amount: 100, method: 'cash' });
-    await owner.post('/money', { type: 'transfer', business: 'restaurant', method: 'cash', toBusiness: 'store', toMethod: 'cash', amount: 100 });
-    await owner.post('/money', { type: 'transfer', business: 'store', method: 'cash', toBusiness: 'restaurant', toMethod: 'cash', amount: 100 });
     const r2 = (await owner.get('/dashboard?business=restaurant')).figures.today.restaurant;
-    assert.deepEqual([r2.revenue, r2.expenses, r2.profit], [500, 100, 400], 'owner can still move restaurant money; expenses count');
+    assert.deepEqual([r2.revenue, r2.expenses, r2.profit], [500, 100, 400], 'expenses count');
     assert.ok(!(await owner.get('/dashboard?business=restaurant')).alerts.some((a) => a.title === 'Day not closed'), 'no daily closing in the restaurant');
   });
 
@@ -211,20 +208,37 @@ try {
     assert.deepEqual([f.revenue, f.cogs, f.losses, f.cashDiff, f.profit], [30000, 25000, 833, 500, 3667]);
   });
 
-  await step('transfer between businesses is not revenue or expense', async () => {
-    const before = (await owner.get('/dashboard')).figures.today.all;
-    await owner.post('/money', { type: 'transfer', business: 'store', method: 'cash', toBusiness: 'fuel', toMethod: 'cash', amount: 1000 });
-    const after = (await owner.get('/dashboard')).figures.today.all;
-    assert.deepEqual(after, before);
+  await step('money and transfers are gone: only debt payments remain (and can be cancelled)', async () => {
+    // Transfers between businesses and owner money in/out can no longer be made, even by the owner.
+    for (const body of [
+      { type: 'transfer', business: 'store', method: 'cash', toBusiness: 'fuel', toMethod: 'cash', amount: 1000 },
+      { type: 'owner_in', business: 'store', method: 'cash', amount: 1000 },
+      { type: 'owner_out', business: 'store', method: 'cash', amount: 1000 },
+    ]) assert.equal((await owner.call('POST', '/money', body)).status, 400, body.type);
+    // The Money page's data endpoints are gone.
+    assert.equal((await owner.call('GET', '/money?business=store')).status, 404);
+    assert.equal((await owner.call('GET', '/balances?business=store')).status, 404);
+    // There is no "money" permission any more.
+    const boot = await owner.get('/bootstrap');
+    assert.ok(boot.user.owner);
+    // A customer paying a debt still works; a wrong payment is cancelled from the customer's statement data.
+    const owed = (await owner.get('/customers?business=store')).find((c) => c.id === customer).balance;
+    assert.ok(owed > 0);
+    const pay = await owner.post('/money', { type: 'customer_payment', business: 'store', customer, method: 'cash', amount: 100 });
+    const st = await owner.get(`/customers/${customer}/statement?business=store`);
+    const line = st.lines.find((l) => l.ref_id === pay.id);
+    assert.deepEqual([line.ref_type, line.type, line.amount], ['money', 'customer_payment', -100]);
+    await owner.post(`/money/${pay.id}/void`, { reason: 'Recorded by mistake' });
+    assert.equal((await owner.get('/customers?business=store')).find((c) => c.id === customer).balance, owed, 'the debt came back');
   });
 
   await step('daily cash closing: difference must be explained, day locks, reopen', async () => {
     const pre = await owner.get(`/closing/preview?business=store&date=${today}`);
     const cash = pre.lines.find((l) => l.method_id === 'cash');
     assert.equal(cash.opening, 0);
-    assert.equal(cash.expected, 6500);
-    assert.deepEqual([cash.sales_in, cash.collections, cash.expenses_out, cash.suppliers_out, cash.transfers], [2500, 3000, -3000, -15000, 19000]);
-    const counted = { cash: 6400, zaad: 0, edahab: 0 };
+    assert.equal(cash.expected, -12500);   // no opening money was ever put in, so more went out than came in
+    assert.deepEqual([cash.sales_in, cash.collections, cash.expenses_out, cash.suppliers_out, cash.transfers], [2500, 3000, -3000, -15000, 0]);
+    const counted = { cash: -12600, zaad: 0, edahab: 0 };
     assert.equal((await owner.call('POST', '/closing', { business: 'store', date: today, counted })).status, 400, 'explanation required');
     const closing = await owner.post('/closing', { business: 'store', date: today, counted, explanation: 'Missing 1 dollar' });
     assert.equal((await owner.call('POST', '/closing', { business: 'store', date: today, counted, explanation: 'again' })).status, 409);
@@ -232,7 +246,7 @@ try {
     assert.equal(locked.status, 409, 'closed day is locked');
     const d = await owner.get('/dashboard?business=store');
     assert.equal(store(d).profit, -1600);
-    assert.equal(d.cash.find((c) => c.method_id === 'cash').balance, 6400);
+    assert.equal(d.cash.find((c) => c.method_id === 'cash').balance, -12600);
     assert.ok(d.alerts.some((a) => /Cash short \$1\.00/.test(a.title)));
     await owner.post(`/closing/${closing.id}/reopen`, { reason: 'Recount' });
     const d2 = await owner.get('/dashboard?business=store');
@@ -252,7 +266,7 @@ try {
     assert.deepEqual(rec, { store: 2000, fuel: 500 });
     assert.deepEqual(pay, { store: 7000, fuel: 170000 });
     const cash = Object.fromEntries(d.cash.map((c) => [`${c.business_id}:${c.method_id}`, c.balance]));
-    assert.equal(cash['fuel:cash'], 26000); assert.equal(cash['fuel:zaad'], 4000); assert.equal(cash['restaurant:cash'], 400);   // 500 sales − 100 expense
+    assert.equal(cash['fuel:cash'], 25000); assert.equal(cash['fuel:zaad'], 4000); assert.equal(cash['restaurant:cash'], 400);   // 500 sales − 100 expense
     const summary = await owner.get('/reports/summary');
     assert.equal(summary.profit.all.profit, 2467);
     assert.equal(summary.topProducts.find((p) => p.product_id === rice).qty, 3);
@@ -565,7 +579,7 @@ try {
     // No daily closing and no money page at the fuel station.
     assert.equal((await fm.call('GET', '/closing/preview?business=fuel')).status, 403);
     assert.equal((await fc.call('GET', '/closing/preview?business=fuel')).status, 403);
-    assert.equal((await fm.call('GET', '/money?business=fuel')).status, 403);
+    assert.equal((await fm.call('GET', '/money?business=fuel')).status, 404, 'there is no money page');
     assert.ok(!(await owner.get('/dashboard?business=fuel')).alerts.some((a) => a.title === 'Day not closed'));
 
     // Every salesman opens their own shift. The owner does not work shifts.
@@ -717,7 +731,7 @@ try {
     const inv = sql(`SELECT business_id, SUM(amount) v FROM journal_lines WHERE account = 'inventory' GROUP BY business_id`);
     const stock = sql(`SELECT business_id, ROUND(SUM(stock_qty * avg_cost)) v FROM products GROUP BY business_id`);
     for (const r of inv) assert.ok(Math.abs(r.v - stock.find((s) => s.business_id === r.business_id).v) <= 1, `inventory ledger matches stock for ${r.business_id}`);
-    assert.equal(sql(`SELECT SUM(amount) s FROM journal_lines WHERE account = 'transfer'`)[0].s, 0);
+    assert.equal(sql(`SELECT SUM(amount) s FROM journal_lines WHERE account = 'transfer'`)[0].s ?? 0, 0);
     // The summary tables the screens read must match the full journal exactly.
     assert.deepEqual(sql(`SELECT * FROM (SELECT business_id, account, COALESCE(method_id,'') m, COALESCE(customer_id,'') c, COALESCE(supplier_id,'') s, SUM(amount) v
         FROM journal_lines GROUP BY 1,2,3,4,5) j FULL OUTER JOIN account_balances b USING (business_id, account)

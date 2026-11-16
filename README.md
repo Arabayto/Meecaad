@@ -19,7 +19,7 @@ functions/api/[[path]].ts  router: auth, CSRF check, permission check, JSON erro
 server/lib.ts              validation, roles/permissions, journal posting, atomic write batch (Tx)
 server/auth.ts             sign-in, sessions, users
 server/catalog.ts          products, stock adjustments, customers, suppliers, payment methods, tanks, pumps
-server/ops.ts              sales, returns, purchases, expenses, debt payments, transfers, owner money
+server/ops.ts              sales, returns, purchases, expenses, debt payments (customers paying, suppliers paid)
 server/fuel.ts             shift meter readings, tank dips, fuel reconciliation
 server/reports.ts          owner dashboard, alerts, reports, daily closing, audit log
 src/pages/*                one page per screen
@@ -42,14 +42,14 @@ The owner never sees accounting jargon; internally the accounts are:
 | `expense` (with category) | Rent, salaries, electricity, … |
 | `stock_loss` | Waste, damage, count corrections, fuel tank variance |
 | `cash_diff` | Cash shortages/overages from closings and fuel shifts |
-| `transfer`, `owner` | Money moved between businesses; owner money in/out and opening balances |
+| `transfer`, `owner` | Old transfers between businesses and owner money (no longer possible; kept for history) |
 
 **Profit = sales − cost of goods − expenses − stock losses − cash differences.** Money received is shown separately from profit.
 
 How the common mistakes are avoided:
 
 1. **Credit sale** → sales + customer debt. A later **debt payment** moves debt → cash; it is never a sale (and cannot exceed what is owed).
-2. **Transfers** move cash between accounts/businesses only. Between businesses each side posts against `transfer`, which nets to zero across all businesses — revenue and profit are unchanged (tested).
+2. **No transfers.** Money moves only when a customer pays a debt or a supplier is paid. (Older transfers stay in the books, netting to zero.)
 3. **Purchases** go to stock (weighted-average cost), not expenses. Cost of goods is recorded when an item is sold (store, stocked drinks) or used (restaurant ingredient usage) or pumped (fuel).
 4. **Cancellations and returns** post reversing entries (dated the day they happen) and put stock back; the original record stays, marked cancelled, with who/when/why.
 5. **Debts** are always the live sum of the journal, per business and per customer/supplier; statements show every charge and payment with a running balance.
@@ -77,14 +77,14 @@ How the common mistakes are avoided:
 
 ## Owner admin (all businesses together)
 
-Kept short on purpose. **Overview:** one card per business with **Sales, Spent and Profit** (Today / This week / This month, with the change against the period before; tap a card to open that business), then the three totals, a few lines in plain words (which business brings the most, who is losing money, what customers owe), the top things that need attention, and a small money-position box. **Reports:** by business, where the money went (expenses by kind), how customers paid, and day by day; "All transactions" is a second tab. *Spent* = cost of goods + expenses + losses and cash shortages; *Profit* = Sales − Spent. There is no Money & Transfers page in the owner admin (the store still has its own Money page until it is redone).
+Kept short on purpose. **Overview:** one card per business with **Sales, Spent and Profit** (Today / This week / This month, with the change against the period before; tap a card to open that business), then the three totals, a few lines in plain words (which business brings the most, who is losing money, what customers owe), the top things that need attention, and a small money-position box. **Reports:** by business, where the money went (expenses by kind), how customers paid, and day by day; "All transactions" is a second tab. *Spent* = cost of goods + expenses + losses and cash shortages; *Profit* = Sales − Spent. There is no Money page and no transfers anywhere: money moves only when a customer pays a debt or a supplier is paid (from Customers / Suppliers; a wrong payment is cancelled from the person's statement). Transfers between businesses and owner money in/out were removed; any made before stay in the books and can be seen.
 
 ## Owner dashboard, closing, alerts
 
 - Switch **All Businesses / Restaurant & Cafe / Fuel Station / Store**; **Today / This week / This month**, each compared with yesterday / the same days last week / the same days last month. Combined figures are always shown next to each business's own figures.
 - Sales, cost of goods, expenses, losses, estimated profit, money available (per business × payment method), customers owe us, we owe suppliers, stock value, money received/paid today, recent activity, and alerts: out-of-stock/low stock, low or negative tanks, fuel missing in dips, fuel shift shortages, meter gaps, cash shortages at closing, days not closed, overdue debts (no payment for 30 days), negative money balances.
 - **Restaurant shift closing (xisaab xidh)** — every person who takes money closes their own shift: everything they did since their last closing (no fixed hours). Per payment method (Cash, Zaad, Edahab) the system shows sales, debts collected and expenses paid from the drawer, so the **expected** amount; the person enters what they **have** (optional: change money that was already in the drawer). Any difference needs an explanation, is booked as a cash difference under their name, and appears in alerts. The money is handed to a named owner/manager, unpaid orders are handed over to the next shift, and a slip can be printed. Someone who still has an unclosed shift started on an earlier day cannot take payments or pay expenses until they close it (taking orders still works). Owner/manager see **Closings**: all shifts (reopen the latest with a reason), who has not closed yet, per-day and per-cashier totals (short/over). The owner can **close a finished month or year**: nothing dated in it can be added, changed or cancelled until reopened with a reason (all shifts with money in it must be closed first).
-- **Daily closing** per business (store, fuel station): opening balance, sales, debts collected, expenses, stock/supplier payments, transfers/owner money, **expected** (calculated), **counted** (entered), **difference** (explanation required). The difference is posted as a cash difference so the books match the real money — it is never hidden. Closed days are locked; only the owner/manager can reopen the latest day, with a reason, which reverses the difference.
+- **Daily closing** per business (store, fuel station): opening balance, sales, debts collected, expenses, stock/supplier payments, **expected** (calculated), **counted** (entered), **difference** (explanation required). The difference is posted as a cash difference so the books match the real money — it is never hidden. Closed days are locked; only the owner/manager can reopen the latest day, with a reason, which reverses the difference.
 
 ## Portals and roles
 

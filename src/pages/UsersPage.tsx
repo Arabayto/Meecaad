@@ -16,7 +16,7 @@ const ROLE_HELP: Record<string, string> = {
 };
 const PERM_LABEL: Record<Perm, string> = {
   sell: 'Take orders & payments', fuel: 'Pump readings', stock: 'Stock', purchase: 'Purchases', expense: 'Record expenses', close: 'Daily closing',
-  void: 'Cancel / return / reopen', catalog: 'Menu, products & prices', money: 'Money & transfers', reports: 'Dashboard, reports & closings', users: 'Users & roles',
+  void: 'Cancel / return / reopen', catalog: 'Menu, products & prices', reports: 'Dashboard, reports & closings', users: 'Users & roles',
 };
 const BIZ_ROLES: BizRole[] = ['manager', 'cashier', 'staff'];
 const PASSWORD_HINT = 'At least 8 characters, letters and numbers, not the username';
