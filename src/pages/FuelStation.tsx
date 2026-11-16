@@ -1,144 +1,166 @@
 // Fuel station, the way it is run:
-//   Sales — open a shift with the fuel it works with (e.g. 2,000 L = $2,000), record every
-//           sale (Cash / Zaad / Edahab or a customer debt), then Xisaab xidh: when the sales
-//           match the opening value the shift is done and the next one opens.
-//   Shifts, Expenses, Dashboard, Reports, Settings (exchange rate).
+//   Sales     — a salesman opens their own shift, records the money collected
+//               (Cash / Zaad / Edahab, or a customer debt) and closes the shift
+//               when their time finishes. No opening fuel or money.
+//   Shifts    — every shift: who, when (Hargeisa time), how much was collected.
+//   Dashboard — what is happening now and plain numbers for decisions.
+//   Reports, Settings (exchange rate, shift times).
 import { Fragment, useState } from 'react';
-import { BarChart3, CheckCircle2, ClipboardCheck, Fuel, History, Home, Printer, RefreshCw, Settings } from 'lucide-react';
+import { BarChart3, ClipboardCheck, Clock, Fuel, History, Home, Lightbulb, Play, Printer, RefreshCw, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { fromCents, get, money, num, post, toCents } from '../api';
+import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
+import { Tabs } from '../components/Tabs';
 import { PageSkeleton } from '../components/LoadingSpinner';
-import { DateRange, ErrorBox, Field, MoneyInput, PageHeader, PartySelect, ReasonModal, Stat, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Field, MoneyInput, PageHeader, PartySelect, ReasonModal, Stat, addDays, fmtClock, fmtDuration, fmtTime, useFilters, useLoad, usePolling, useSubmit } from '../components/ui';
 
 /** "14,280,000 SLSH" for an amount in cents at a rate (SLSH per $1), or null when there is no rate. */
 const slsh = (cents: number, rate: number | null | undefined) => (rate ? `${Math.round((cents / 100) * rate).toLocaleString('en-US')} SLSH` : null);
 const rateText = (rate: number) => `$1 = ${rate.toLocaleString('en-US')} SLSH`;
-const perLitre = (s: any) => money(Math.round(s.opening_value / s.opening_liters));
+const rateOn = (rates: { rate_date: string; rate: number; set_at: string }[], day: string) =>
+  rates.filter((r) => r.rate_date <= day).sort((a, b) => (a.rate_date + a.set_at < b.rate_date + b.set_at ? 1 : -1))[0]?.rate ?? null;
+const pct = (now: number, before: number) => (before > 0 ? Math.round(((now - before) / before) * 100) : null);
 
-/** Open / Matched / Not matched. */
-function ShiftStatus({ s }: { s: any }) {
-  if (s.status === 'open') return <StatusBadge label="Open" tone="yellow" />;
-  if (s.remaining !== 0 && s.carried) return <StatusBadge label={`${money(s.remaining)} passed to next shift`} tone="green" />;
-  return s.remaining === 0 ? <StatusBadge label="Matched" tone="green" /> : <StatusBadge label={`Not matched ${money(Math.abs(s.remaining))}`} tone="red" />;
+/** ▲ 12% vs … (green) / ▼ 8% (red). */
+function Trend({ now, before, label }: { now: number; before: number; label: string }) {
+  const p = pct(now, before);
+  if (p === null) return <span className="small muted">{before === 0 && now === 0 ? 'no sales yet' : `nothing ${label}`}</span>;
+  return <span className={`trend ${p >= 0 ? 'trend--up' : 'trend--down'}`}>{p >= 0 ? '▲' : '▼'} {Math.abs(p)}% vs {label}</span>;
 }
 
-/** What came in per payment method + debts, and whether it matches the opening value. */
-function Count({ s, methods }: { s: any; methods: { id: string; name: string }[] }) {
-  const left = s.status === 'open' ? s.remaining_now : s.remaining;
+function Bar({ value, max, tone = 'var(--primary)' }: { value: number; max: number; tone?: string }) {
+  return <div className="bar"><span style={{ width: `${max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0}%`, background: tone }} /></div>;
+}
+
+/** Open (until 14:00) / Overdue / Closed. */
+function ShiftBadge({ s }: { s: any }) {
+  if (s.status === 'closed') return <StatusBadge label="Closed" tone="green" />;
+  if (s.overdue) return <StatusBadge label={`Overdue · should end ${fmtClock(s.ends_at)}`} tone="red" />;
+  return <StatusBadge label={s.ends_at ? `Open · until ${fmtClock(s.ends_at)}` : 'Open'} tone="yellow" />;
+}
+
+/** What was collected: per payment method, customer debts, total. */
+function Collected({ s, methods }: { s: any; methods: { id: string; name: string }[] }) {
   return (
     <div className="kv">
       {methods.map((m) => <Fragment key={m.id}><span>{m.name}</span><span>{money(s.by_method[m.id] ?? 0)}</span></Fragment>)}
       <span>Customer debts</span><span>{money(s.debts)}</span>
-      <span className="kv-total">Total sold</span><span className="kv-total">{money(s.sold)} of {money(s.opening_value)}</span>
-      <span className="kv-total">{left === 0 ? 'Matched' : s.status === 'closed' && s.carried ? 'Passed to next shift' : left > 0 ? 'Remaining' : 'Over'}</span>
-      <span className="kv-total" style={{ color: left === 0 || s.carried ? '#15803d' : '#b91c1c' }}>{left === 0 ? '✓' : money(Math.abs(left))}</span>
+      <span className="kv-total">Total collected</span><span className="kv-total">{money(s.sold)}</span>
     </div>
   );
 }
 
-// ── Sales: open shift → record sales → xisaab xidh ──────────────
+// ── Sales ───────────────────────────────────────────────────────
 export function FuelSalesPage() {
   const { can, activeMethods } = useAuth();
   const cur = useLoad(() => get('/fuel/current'), []);
+  usePolling(cur.reload, 20000);
   const customers = useLoad(() => get('/customers', { business: 'fuel' }), []);
   const [slip, setSlip] = useState<any>(null);
   const [closing, setClosing] = useState(false);
   const [voiding, setVoiding] = useState<any>(null);
   const d = cur.data;
-  const s = d?.shift;
+  const s = d?.mine;
   const reload = () => { cur.reload(); customers.reload(); };
+  const others = (d?.live ?? []).filter((x: any) => x.id !== s?.id);
 
   return (
     <div className="module-page">
       <PageHeader icon={<Fuel size={22} />} title="Sales"
-        subtitle={s ? `Shift #${s.number} · opened by ${s.opened_by_name} at ${fmtTime(s.opened_at)}${d.rate ? ` · ${rateText(d.rate)}` : ''}` : 'Open a shift with the fuel you are working with'}
-        actions={s && can('fuel') && <button type="button" className="btn btn-primary" onClick={() => setClosing(true)}><ClipboardCheck size={16} /> Xisaab xidh</button>} />
+        subtitle={s ? `${s.shift_name} shift #${s.number} · opened ${fmtClock(s.opened_at)} Hargeisa time${d.rate ? ` · ${rateText(d.rate)}` : ''}` : d?.owner ? 'What is happening in the shifts right now' : 'Open your shift, record the money you collect, close it when your time finishes'}
+        actions={s && <button type="button" className="btn btn-primary" onClick={() => setClosing(true)}><ClipboardCheck size={16} /> Close my shift</button>} />
       <ErrorBox error={cur.error} />
       {!d && !cur.error && <PageSkeleton />}
-      {d && !s && (can('fuel') ? <OpenShift last={d.last} onDone={reload} /> : <div className="panel"><p className="muted">No shift is open.</p></div>)}
+      {d && !d.owner && !s && <OpenShift d={d} onDone={reload} onSlip={async (id) => setSlip(await get(`/fuel/sessions/${id}`))} />}
       {s && (
         <>
+          {s.overdue && <div className="mc-error">Your shift time ended at {fmtClock(s.ends_at)}. Close your shift now.</div>}
           <section className="stat-grid">
-            <Stat label="Opening" value={money(s.opening_value)} sub={`${num(s.opening_liters)} L · ${perLitre(s)}/L`} />
-            <Stat label="Sold" value={money(s.sold)} sub={`${num(s.liters)} L · ${s.count} sales`} />
-            <Stat label="Remaining" value={money(s.remaining_now)} tone={s.remaining_now === 0 ? 'green' : undefined} sub={s.remaining_now === 0 ? 'Matched — ready for xisaab xidh' : `${num(s.remaining_liters)} L left`} />
-            <Stat label="Cash · Zaad · Edahab" value={money(s.sold - s.debts)} sub={`debts ${money(s.debts)}`} />
+            <Stat label="Collected this shift" value={money(s.sold)} sub={`${s.count} ${s.count === 1 ? 'sale' : 'sales'} · ${fmtDuration(s.duration_min)} so far`} />
+            {activeMethods.map((m) => <Stat key={m.id} label={m.name} value={money(s.by_method[m.id] ?? 0)} />)}
+            <Stat label="Customer debts" value={money(s.debts)} />
           </section>
-          {can('fuel') && <NewSale shift={s} rate={d.rate} customers={customers} onDone={reload} />}
-          <div className="grid-2">
-            <div className="panel">
-              <div className="panel__header"><div><p>This shift</p><h2>Sales</h2></div></div>
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Time</th><th className="num">Amount</th><th className="num">Litres</th><th>Paid with</th><th>By</th><th></th></tr></thead>
-                  <tbody>
-                    {d.sales.map((x: any) => (
-                      <tr key={x.id} style={{ opacity: x.status === 'voided' ? 0.5 : 1 }}>
-                        <td className="small">{fmtTime(x.created_at)}</td>
-                        <td className="num"><strong>{money(x.amount)}</strong>{x.slsh_amount && <div className="small muted">{x.slsh_amount.toLocaleString('en-US')} SLSH</div>}</td>
-                        <td className="num">{num(x.liters)}</td>
-                        <td>{x.method_name ?? <>Debt: <strong>{x.customer_name}</strong></>}{x.status === 'voided' && <div><StatusBadge label="Cancelled" tone="red" /> <span className="small muted">{x.void_reason}</span></div>}</td>
-                        <td className="small">{x.created_by_name}</td>
-                        <td>{can('void') && x.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(x)}>Cancel</button>}</td>
-                      </tr>
-                    ))}
-                    {!d.sales.length && <tr><td colSpan={6} className="muted">No sales yet in this shift.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel__header"><div><p>Xisaab xidh</p><h2>Count so far</h2></div></div>
-              <Count s={s} methods={activeMethods} />
-              {can('fuel') && <div className="form-actions"><button type="button" className="btn btn-primary" onClick={() => setClosing(true)}><ClipboardCheck size={16} /> Close shift (xisaab xidh)</button></div>}
-            </div>
+          <NewSale rate={d.rate} customers={customers} onDone={reload} />
+          <div className="panel">
+            <div className="panel__header"><div><p>My shift</p><h2>Sales</h2></div></div>
+            <SalesTable sales={d.sales} canVoid={can('void')} onVoid={setVoiding} />
           </div>
         </>
       )}
+      {d && (d.live.length > 0 && (can('reports') || can('void'))) && (
+        <LiveBoard live={others.length || !s ? (s ? others : d.live) : []} title={s ? 'Other open shifts' : 'Open shifts now'} onChanged={reload} />
+      )}
       {closing && s && <CloseShift s={s} methods={activeMethods} onClose={() => setClosing(false)}
         onDone={async (id) => { setClosing(false); setSlip(await get(`/fuel/sessions/${id}`)); reload(); }} />}
-      {slip && <ShiftSlip s={slip} rate={d?.rate} onClose={() => setSlip(null)} />}
+      {slip && <ShiftSlip s={slip} onClose={() => setSlip(null)} />}
       {voiding && <ReasonModal open onClose={() => setVoiding(null)} title="Cancel this sale?" action={`/fuel/sales/${voiding.id}/void`} confirmLabel="Cancel sale"
-        message={<>{money(voiding.amount)} · {voiding.method_name ?? `debt of ${voiding.customer_name}`}. The money is taken off this shift.</>} onDone={reload} />}
+        message={<>{money(voiding.amount)} · {voiding.method_name ?? `debt of ${voiding.customer_name}`}. The money is taken off the shift and the books.</>} onDone={reload} />}
     </div>
   );
 }
 
-function OpenShift({ last, onDone }: { last: any; onDone: () => void }) {
-  // Fuel the last shift passed on is part of this shift: it starts here and new fuel is added on top.
-  const carry = last && last.status === 'closed' && last.carried && !last.carried_to && last.remaining > 0 ? last : null;
-  const [liters, setLiters] = useState(carry ? String(carry.remaining_liters) : '');
-  const [value, setValue] = useState(carry ? fromCents(carry.remaining) : '');
-  const [note, setNote] = useState('');
-  const { run, busy } = useSubmit();
-  const l = Number(liters), v = toCents(value);
-  const short = Boolean(carry) && (v < carry.remaining || l < carry.remaining_liters - 0.0005);
-  const open = async () => {
-    if (await run((key) => post('/fuel/open', { liters: l, value: v, note }, key), 'Shift opened')) onDone();
-  };
+function SalesTable({ sales, canVoid, onVoid }: { sales: any[]; canVoid: boolean; onVoid?: (x: any) => void }) {
   return (
-    <div className="panel form-stack">
-      <div className="panel__header"><div><p>Start</p><h2>Open shift</h2></div></div>
-      <p className="small muted" style={{ margin: 0 }}>Enter the fuel this shift works with and what it is worth, e.g. 2,000 L = $2,000. At the end, the sales must add up to this.</p>
-      {carry && (
-        <div className="mc-note">Shift #{carry.number} passed {money(carry.remaining)} ({num(carry.remaining_liters)} L) to this shift, so it is already filled in. If you received new fuel, add its litres and value on top.{' '}
-          <button type="button" className="btn btn-ghost btn-xs" onClick={() => { setLiters(String(carry.remaining_liters)); setValue(fromCents(carry.remaining)); }}>Reset</button></div>
-      )}
-      <div className="form-row-3">
-        <Field label="Litres"><input className="form-input" inputMode="decimal" value={liters} onChange={(e) => setLiters(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="2000" autoFocus /></Field>
-        <Field label="Value (USD)"><MoneyInput value={value} onChange={setValue} placeholder="2000.00" /></Field>
-        <Field label="Note (optional)"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. morning shift" /></Field>
-      </div>
-      {l > 0 && v > 0 && <p className="small" style={{ margin: 0 }}>Price: <strong>{money(Math.round(v / l))} per litre</strong></p>}
-      <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !(l > 0) || !(v > 0) || short} onClick={open}>Open shift</button></div>
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Time</th><th className="num">Amount</th><th>Received as</th><th>By</th><th></th></tr></thead>
+        <tbody>
+          {sales.map((x) => (
+            <tr key={x.id} style={{ opacity: x.status === 'voided' ? 0.5 : 1 }}>
+              <td className="small">{fmtClock(x.created_at)}</td>
+              <td className="num"><strong>{money(x.amount)}</strong>{x.slsh_amount && <div className="small muted">{x.slsh_amount.toLocaleString('en-US')} SLSH</div>}</td>
+              <td>{x.method_name ?? <>Debt: <strong>{x.customer_name}</strong></>}{x.status === 'voided' && <div><StatusBadge label="Cancelled" tone="red" /> <span className="small muted">{x.void_reason}</span></div>}</td>
+              <td className="small">{x.created_by_name}</td>
+              <td>{canVoid && onVoid && x.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => onVoid(x)}>Cancel</button>}</td>
+            </tr>
+          ))}
+          {!sales.length && <tr><td colSpan={5} className="muted">No sales yet.</td></tr>}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function NewSale({ shift, rate, customers, onDone }: { shift: any; rate: number | null; customers: { data: any; reload: () => void }; onDone: () => void }) {
+function OpenShift({ d, onDone, onSlip }: { d: any; onDone: () => void; onSlip: (id: string) => void }) {
+  const [name, setName] = useState(d.suggested ?? d.times[0]?.name ?? '');
+  const { run, busy } = useSubmit();
+  const t = d.times.find((x: any) => x.name === name);
+  return (
+    <div className="form-stack">
+      <div className="panel form-stack">
+        <div className="panel__header"><div><p>Start work</p><h2>Open your shift</h2></div></div>
+        <p className="small muted" style={{ margin: 0 }}>Press the button when you start. Then record every payment you collect. Close the shift when your time finishes.</p>
+        <div className="form-row">
+          <Field label="Shift">
+            <select className="form-select" value={name} onChange={(e) => setName(e.target.value)}>
+              {d.times.map((x: any) => <option key={x.name} value={x.name}>{x.name} · {x.start}–{x.end}{x.name === d.suggested ? ' (now)' : ''}</option>)}
+            </select>
+          </Field>
+          <Field label="Hargeisa time now"><div className="cart-total" style={{ fontSize: 22 }}>{fmtClock(new Date().toISOString())}</div></Field>
+        </div>
+        {d.suggested && name !== d.suggested && <div className="mc-warn">Right now it is the {d.suggested} shift time. Open {name} anyway only if that is your shift.</div>}
+        <div className="form-actions">
+          <button type="button" className="btn btn-primary" style={{ minHeight: 52, minWidth: 220, fontSize: 16 }} disabled={busy || !name}
+            onClick={async () => { if (await run((key) => post('/fuel/open', { shiftName: name }, key), `${name} shift opened`)) onDone(); }}>
+            <Play size={18} /> Open {name} shift{t ? ` (${t.start}–${t.end})` : ''}
+          </button>
+        </div>
+      </div>
+      {d.last && (
+        <div className="panel">
+          <div className="row row--between">
+            <span className="small">Your last shift: <strong>{d.last.shift_name} #{d.last.number}</strong>, closed {fmtTime(d.last.closed_at)} — collected <strong>{money(d.last.sold)}</strong></span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSlip(d.last.id)}>View</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewSale({ rate, customers, onDone }: { rate: number | null; customers: { data: any; reload: () => void }; onDone: () => void }) {
   const { activeMethods } = useAuth();
   const [amount, setAmount] = useState('');
   const [inSlsh, setInSlsh] = useState(false);
@@ -146,23 +168,26 @@ function NewSale({ shift, rate, customers, onDone }: { shift: any; rate: number 
   const [customer, setCustomer] = useState('');
   const { run, busy } = useSubmit();
   const usd = inSlsh && rate ? Math.round((Number(amount || 0) / rate) * 100) : toCents(amount);
-  const litres = shift.price ? usd / shift.price : 0;
-  const tooMuch = usd > shift.remaining_now;
-  const ok = usd > 0 && !tooMuch && (method !== 'debt' || customer);
+  const ok = usd > 0 && (method !== 'debt' || customer);
   const save = async () => {
     if (!ok || busy) return;
     const body = method === 'debt' ? { customer, amount: usd } : inSlsh ? { method: 'cash', slsh: amount } : { method, amount: usd };
-    if (await run((key) => post('/fuel/sales', body, key), `Sale ${money(usd)} recorded`)) { setAmount(''); setCustomer(''); onDone(); }
+    if (await run((key) => post('/fuel/sales', body, key), `${money(usd)} recorded`)) { setAmount(''); setCustomer(''); onDone(); }
   };
   const pick = (m: string) => { setMethod(m); if (m !== 'cash') setInSlsh(false); };
   return (
     <div className="panel form-stack">
-      <div className="panel__header"><div><p>New</p><h2>Record a sale</h2></div></div>
+      <div className="panel__header"><div><p>New</p><h2>Record money collected</h2></div></div>
       <div className="method-picker">
         {activeMethods.map((m) => <button key={m.id} type="button" className={`btn ${method === m.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick(m.id)}>{m.name}</button>)}
         <button type="button" className={`btn ${method === 'debt' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pick('debt')}>Customer debt</button>
       </div>
-      {method === 'debt' && <PartySelect kind="customers" value={customer} items={customers.data ?? []} placeholder="Choose customer…" onCreated={customers.reload} onChange={setCustomer} />}
+      {method === 'debt' && (
+        <>
+          <PartySelect kind="customers" value={customer} items={customers.data ?? []} placeholder="Choose the customer…" onCreated={customers.reload} onChange={setCustomer} />
+          <p className="small muted" style={{ margin: 0 }}>The customer must be in the list. Use “+ New” to add one first.</p>
+        </>
+      )}
       <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 220px' }}>
           <Field label={inSlsh ? 'Amount (SLSH)' : 'Amount (USD)'}>
@@ -176,78 +201,81 @@ function NewSale({ shift, rate, customers, onDone }: { shift: any; rate: number 
             <button type="button" className={`btn btn-sm ${inSlsh ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setInSlsh(true); setAmount(''); }}>SLSH</button>
           </div>
         )}
-        <button type="button" className="btn btn-primary" style={{ minHeight: 52, minWidth: 180 }} disabled={!ok || busy} onClick={save}>Record sale {usd > 0 ? money(usd) : ''}</button>
+        <button type="button" className="btn btn-primary" style={{ minHeight: 52, minWidth: 180 }} disabled={!ok || busy} onClick={save}>Record {usd > 0 ? money(usd) : ''}</button>
       </div>
-      {usd > 0 && (
-        <p className="small" style={{ margin: 0, color: tooMuch ? '#b91c1c' : undefined }}>
-          {tooMuch ? `More than what is left in this shift (${money(shift.remaining_now)}).` : <>= {money(usd)}{inSlsh ? '' : slsh(usd, rate) ? ` · ${slsh(usd, rate)}` : ''} · {num(Math.round(litres * 1000) / 1000)} L</>}
-        </p>
-      )}
+      {usd > 0 && <p className="small" style={{ margin: 0 }}>= {money(usd)}{inSlsh ? '' : slsh(usd, rate) ? ` · ${slsh(usd, rate)}` : ''}</p>}
     </div>
   );
 }
 
 function CloseShift({ s, methods, onClose, onDone }: { s: any; methods: { id: string; name: string }[]; onClose: () => void; onDone: (id: string) => void }) {
-  const [explanation, setExplanation] = useState('');
-  const [mode, setMode] = useState<'carry' | 'explain'>('carry');
+  const [note, setNote] = useState('');
   const { run, busy } = useSubmit();
-  const matched = s.remaining_now === 0;
-  const canCarry = s.remaining_now > 0;
-  const carry = canCarry && mode === 'carry';
-  const close = async () => {
-    const r = await run((key) => post('/fuel/close', carry ? { carry: true } : { explanation }, key), carry ? 'Shift closed — the rest goes to the next shift' : 'Shift closed');
-    if (r) onDone(r.id);
-  };
   return (
-    <Modal open onClose={onClose} title={`Xisaab xidh — shift #${s.number}`} width="md"
+    <Modal open onClose={onClose} title={`Close ${s.shift_name} shift #${s.number}`} width="md"
       footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Back</button>
-        <button type="button" className="btn btn-primary" disabled={busy || (!matched && !carry && !explanation.trim())} onClick={close}>Close shift</button></>}>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={async () => { const r = await run((key) => post('/fuel/close', { note }, key), 'Shift closed'); if (r) onDone(r.id); }}>Close shift</button></>}>
       <div className="form-stack">
-        <Count s={s} methods={methods} />
-        {matched
-          ? <div className="mc-note"><CheckCircle2 size={14} style={{ verticalAlign: -2 }} /> Matched: {money(s.opening_value)} fully accounted for. The next shift can open.</div>
-          : <>
-            <div className="mc-warn">{money(Math.abs(s.remaining_now))} {s.remaining_now > 0 ? `(${num(s.remaining_liters)} L) of the opening value is not sold` : 'more than the opening value was sold'}.</div>
-            {canCarry && (
-              <div className="form-stack">
-                <label className="row"><input type="radio" name="close-mode" checked={mode === 'carry'} onChange={() => setMode('carry')} /> <span><strong>Pass it to the next shift</strong> — the fuel is still there; the next shift starts with it. This shift counts as done.</span></label>
-                <label className="row"><input type="radio" name="close-mode" checked={mode === 'explain'} onChange={() => setMode('explain')} /> <span><strong>Something is wrong</strong> — fuel or money is missing. It is flagged and needs an explanation.</span></label>
-              </div>
-            )}
-            {(!canCarry || mode === 'explain') && <Field label="Explanation (required)"><input className="form-input" value={explanation} onChange={(e) => setExplanation(e.target.value)} placeholder="e.g. money still with the attendant" /></Field>}
-          </>}
+        <p className="small muted" style={{ margin: 0 }}>Worked {fmtClock(s.opened_at)} – now ({fmtDuration(s.duration_min)}) · {s.count} sales. Check that this is what you collected:</p>
+        <Collected s={s} methods={methods} />
+        <Field label="Note for the owner (optional)"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. pump 2 was broken in the afternoon" /></Field>
+        <div className="mc-note">After you close, you cannot add sales to this shift. Open a new shift when you start again.</div>
       </div>
     </Modal>
   );
 }
 
-/** A shift with all its sales: printable. */
-function ShiftSlip({ s, rate, onClose }: { s: any; rate?: number | null; onClose: () => void }) {
+/** Everyone's open shifts right now (managers and the owner). A manager can close a forgotten one. */
+function LiveBoard({ live, title, onChanged }: { live: any[]; title: string; onChanged: () => void }) {
+  const { can, activeMethods } = useAuth();
+  const [closing, setClosing] = useState<any>(null);
+  const { run, busy } = useSubmit();
+  if (!live.length) return null;
   return (
-    <Modal open onClose={onClose} title={`Shift #${s.number} · ${s.entry_date}`} width="lg"
+    <div className="panel">
+      <div className="panel__header"><div><p>Live · Hargeisa time</p><h2>{title}</h2></div></div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Salesman</th><th>Shift</th><th>Opened</th><th className="num">Collected</th>{activeMethods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {live.map((x) => (
+              <tr key={x.id}>
+                <td><strong>{x.user_name}</strong></td><td>{x.shift_name} #{x.number}</td>
+                <td className="small">{fmtClock(x.opened_at)}<div className="muted">{fmtDuration(x.duration_min)}</div></td>
+                <td className="num"><strong>{money(x.sold)}</strong><div className="small muted">{x.count} sales</div></td>
+                {activeMethods.map((m) => <td key={m.id} className="num">{money(x.by_method[m.id] ?? 0)}</td>)}
+                <td className="num">{money(x.debts)}</td><td><ShiftBadge s={x} /></td>
+                <td>{can('void') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setClosing(x)}>Close</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {closing && (
+        <Modal open onClose={() => setClosing(null)} title={`Close ${closing.user_name}'s shift?`} width="sm"
+          footer={<><button type="button" className="btn btn-secondary" onClick={() => setClosing(null)}>Back</button>
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={async () => { if (await run((key) => post('/fuel/close', { shiftId: closing.id, note: 'Closed by the manager' }, key), 'Shift closed')) { setClosing(null); onChanged(); } }}>Close shift</button></>}>
+          <p>{closing.user_name} has collected {money(closing.sold)} in this {closing.shift_name} shift. Closing it stops new sales from being added to it. Use this when they forgot to close.</p>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** A shift with all its sales: printable. */
+function ShiftSlip({ s, onClose }: { s: any; onClose: () => void }) {
+  return (
+    <Modal open onClose={onClose} title={`${s.shift_name} shift #${s.number} · ${s.user_name}`} width="lg"
       footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
       <div className="print-area form-stack">
         <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
-        <h3 style={{ margin: 0 }}>Meecaad Fuel Station — shift #{s.number}</h3>
+        <h3 style={{ margin: 0 }}>Meecaad Fuel Station — {s.shift_name} shift #{s.number}</h3>
         <p className="small" style={{ margin: 0 }}>
-          Opened {fmtTime(s.opened_at)} by {s.opened_by_name} · {num(s.opening_liters)} L = {money(s.opening_value)} ({perLitre(s)}/L){s.carried_in > 0 && ` — includes ${money(s.carried_in)} passed from shift #${s.carried_from}`}{slsh(s.opening_value, s.rate ?? rate) && ` · ${slsh(s.opening_value, s.rate ?? rate)}`}
-          {s.closed_at && <><br />Closed {fmtTime(s.closed_at)} by {s.closed_by_name}</>}
+          {s.user_name} · opened {fmtTime(s.opened_at)}{s.closed_at ? ` · closed ${fmtTime(s.closed_at)}${s.closed_by_name && s.closed_by_name !== s.user_name ? ` by ${s.closed_by_name}` : ''}` : ' · still open'} (Hargeisa time) · {fmtDuration(s.duration_min)}
         </p>
-        <ShiftStatus s={s} />
-        <Count s={s} methods={s.methods} />
-        {s.explanation && <p style={{ margin: 0 }}><strong>Explanation:</strong> {s.explanation}</p>}
-        <table>
-          <thead><tr><th>Time</th><th className="num">Amount</th><th className="num">Litres</th><th>Paid with</th><th>By</th></tr></thead>
-          <tbody>
-            {s.sales.map((x: any) => (
-              <tr key={x.id} style={{ textDecoration: x.status === 'voided' ? 'line-through' : undefined }}>
-                <td className="small">{fmtTime(x.created_at)}</td><td className="num">{money(x.amount)}{x.slsh_amount && <span className="small muted"> ({x.slsh_amount.toLocaleString('en-US')} SLSH)</span>}</td>
-                <td className="num">{num(x.liters)}</td><td>{x.method_name ?? `Debt: ${x.customer_name}`}{x.status === 'voided' && ` — cancelled: ${x.void_reason}`}</td><td className="small">{x.created_by_name}</td>
-              </tr>
-            ))}
-            {!s.sales.length && <tr><td colSpan={5} className="muted">No sales.</td></tr>}
-          </tbody>
-        </table>
+        <Collected s={s} methods={s.methods} />
+        {s.note && <p style={{ margin: 0 }}><strong>Note:</strong> {s.note}</p>}
+        <SalesTable sales={s.sales} canVoid={false} />
       </div>
     </Modal>
   );
@@ -255,37 +283,39 @@ function ShiftSlip({ s, rate, onClose }: { s: any; rate?: number | null; onClose
 
 // ── Shifts ──────────────────────────────────────────────────────
 export function FuelShiftsPage() {
-  const { today } = useAuth();
+  const { today, can } = useAuth();
   const [from, setFrom] = useState(addDays(today, -6));
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/fuel/sessions', { from, to }), [from, to]);
+  usePolling(list.reload, 30000);
   const [slip, setSlip] = useState<any>(null);
   const methods: { id: string; name: string }[] = list.data?.methods ?? [];
   const filter = useFilters<any>(list.data?.shifts ?? [], [
-    { key: 'status', label: 'Status', get: (s) => (s.status === 'open' ? 'Open' : s.remaining === 0 ? 'Matched' : s.carried ? 'Passed on' : 'Not matched') },
-    { key: 'by', label: 'Opened by', get: (s) => s.opened_by_name },
+    { key: 'who', label: 'Salesman', get: (s) => s.user_name },
+    { key: 'shift', label: 'Shift', get: (s) => s.shift_name },
+    { key: 'status', label: 'Status', get: (s) => (s.status === 'closed' ? 'Closed' : s.overdue ? 'Overdue' : 'Open') },
   ]);
   return (
     <div className="module-page">
-      <PageHeader icon={<History size={22} />} title="Shifts" subtitle="Every shift: what it started with, what was sold, and whether it matched" />
+      <PageHeader icon={<History size={22} />} title="Shifts" subtitle={can('reports') ? 'Every salesman\'s shifts: when, and how much was collected (Hargeisa time)' : 'Your shifts'} />
       <div className="panel">
         <div style={{ marginBottom: 12 }}><DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} /></div>
         <ErrorBox error={list.error} />
         {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Date</th><th className="num">Opening</th><th className="num">Sold</th>{methods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th><th>Opened / closed by</th></tr></thead>
+            <thead><tr><th>#</th><th>Salesman</th><th>Shift</th><th>Time</th><th className="num">Collected</th>{methods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
             <tbody>
               {filter.shown.map((s: any) => (
                 <tr key={s.id} className="tr--clickable" onClick={async () => setSlip(await get(`/fuel/sessions/${s.id}`))}>
                   <td><strong>{s.number}</strong></td>
-                  <td className="small">{s.entry_date}<div className="muted">{fmtTime(s.opened_at)}</div></td>
-                  <td className="num">{money(s.opening_value)}<div className="small muted">{num(s.opening_liters)} L</div>{s.carried_in > 0 && <div className="small muted">incl. {money(s.carried_in)} from #{s.carried_from}</div>}</td>
-                  <td className="num"><strong>{money(s.sold)}</strong></td>
+                  <td>{s.user_name}</td>
+                  <td>{s.shift_name}<div className="small muted">{s.entry_date}</div></td>
+                  <td className="small">{fmtClock(s.opened_at)} – {s.closed_at ? fmtClock(s.closed_at) : 'now'}<div className="muted">{fmtDuration(s.duration_min)}</div></td>
+                  <td className="num"><strong>{money(s.sold)}</strong><div className="small muted">{s.count} sales</div></td>
                   {methods.map((m) => <td key={m.id} className="num">{money(s.by_method[m.id] ?? 0)}</td>)}
                   <td className="num">{money(s.debts)}</td>
-                  <td><ShiftStatus s={s} />{s.explanation && <div className="small muted" style={{ maxWidth: 220, whiteSpace: 'normal' }}>{s.explanation}</div>}</td>
-                  <td className="small">{s.opened_by_name}{s.closed_by_name && <div className="muted">closed: {s.closed_by_name}</div>}</td>
+                  <td><ShiftBadge s={s} /></td>
                 </tr>
               ))}
               {!list.loading && !filter.shown.length && <tr><td colSpan={methods.length + 7} className="muted">No shifts in this period.</td></tr>}
@@ -298,69 +328,131 @@ export function FuelShiftsPage() {
   );
 }
 
-// ── Dashboard ───────────────────────────────────────────────────
+// ── Dashboard: what is happening, and numbers for decisions ─────
 export function FuelDashboard() {
   const { today, path, activeMethods } = useAuth();
   const navigate = useNavigate();
   const cur = useLoad(() => get('/fuel/current'), []);
+  const sum = useLoad(() => get('/fuel/summary', { from: addDays(today, -6), to: today }), [today]);
   const dash = useLoad(() => get('/dashboard', { business: 'fuel' }), []);
-  const week = useLoad(() => get('/fuel/sessions', { from: addDays(today, -6), to: today }), [today]);
-  if (!cur.data || !dash.data || !week.data) return cur.error || dash.error || week.error ? <ErrorBox error={cur.error || dash.error || week.error} /> : <PageSkeleton />;
-  const s = cur.data.shift;
+  const cust = useLoad(() => get('/customers', { business: 'fuel' }), []);
+  const reload = () => { cur.reload(); sum.reload(); dash.reload(); cust.reload(); };
+  usePolling(reload, 30000);
+  if (!cur.data || !sum.data || !dash.data) return cur.error || sum.error || dash.error ? <ErrorBox error={cur.error || sum.error || dash.error} /> : <PageSkeleton />;
+
   const rate = cur.data.rate;
-  const todays = week.data.shifts.filter((x: any) => x.entry_date === today);
-  const soldToday = todays.reduce((t: number, x: any) => t + x.sold, 0);
-  const owed = dash.data.receivable.find((r: any) => r.business_id === 'fuel');
+  const S = sum.data;
+  const day = (date: string) => S.days.find((x: any) => x.date === date) ?? { sold: 0, debts: 0, count: 0, shifts: 0, by_method: {} };
+  const t = day(today), y = day(addDays(today, -1));
+  const live = cur.data.live as any[];
+  const overdue = live.filter((x) => x.overdue).length;
+  const owed = (cust.data ?? []).filter((c: any) => c.balance > 0).sort((a: any, b: any) => b.balance - a.balance);
+  const owedTotal = owed.reduce((s: number, c: any) => s + c.balance, 0);
   const balances = dash.data.cash.filter((c: any) => c.business_id === 'fuel');
   const alerts = dash.data.alerts.filter((a: any) => a.business === 'fuel').slice(0, 6);
-  const reload = () => { cur.reload(); dash.reload(); week.reload(); };
+  const maxDay = Math.max(1, ...S.days.map((x: any) => x.sold));
+  const topPerson = S.people[0], topShift = S.by_shift[0];
+  const creditShare = S.total.sold ? Math.round((S.total.debts / S.total.sold) * 100) : 0;
+
+  // Plain sentences to help decisions.
+  const insights: string[] = [];
+  const wk = pct(S.total.sold, S.previous.sold);
+  if (wk !== null) insights.push(`Sales in the last 7 days are ${money(S.total.sold)} — ${wk >= 0 ? `up ${wk}%` : `down ${Math.abs(wk)}%`} compared with the 7 days before (${money(S.previous.sold)}).`);
+  if (topShift && S.by_shift.length > 1) insights.push(`The ${topShift.name} shift sells the most: ${money(topShift.average)} per shift on average.`);
+  if (topPerson && S.people.length > 1) insights.push(`${topPerson.name} collected the most this week: ${money(topPerson.sold)} in ${topPerson.shifts} ${topPerson.shifts === 1 ? 'shift' : 'shifts'}.`);
+  if (creditShare >= 15) insights.push(`${creditShare}% of this week's sales were given on credit. Customers owe ${money(owedTotal)} in total — collect before giving more.`);
+  else if (owedTotal > 0) insights.push(`Customers owe ${money(owedTotal)}. Credit is ${creditShare}% of this week's sales.`);
+  if (overdue) insights.push(`${overdue} ${overdue === 1 ? 'shift is' : 'shifts are'} open past the set time — ask the salesman to close.`);
+
   return (
     <div className="dashboard">
-      <PageHeader icon={<Home size={22} />} title="Fuel station dashboard" subtitle={dash.data.today}
+      <PageHeader icon={<Home size={22} />} title="Fuel station dashboard" subtitle={`${dash.data.today} · Hargeisa time`}
         actions={<button type="button" className="btn btn-secondary btn-sm" onClick={reload}><RefreshCw size={14} /> Refresh</button>} />
+
       <section className="stat-grid">
-        <Stat label="Sales today" value={money(soldToday)} sub={`${todays.length} ${todays.length === 1 ? 'shift' : 'shifts'}${slsh(soldToday, rate) ? ` · ${slsh(soldToday, rate)}` : ''}`} />
-        <button type="button" className="stat stat--link" onClick={() => navigate(path('/sales'))}>
-          <span className="stat__label">Current shift</span>
-          <strong className="stat__value">{s ? `#${s.number} · ${money(s.remaining_now)} left` : 'No shift open'}</strong>
-          <span className="stat__sub">{s ? `sold ${money(s.sold)} of ${money(s.opening_value)} · open Sales →` : 'open Sales to start one →'}</span>
+        <Stat label="Sales today" value={money(t.sold)} sub={<><Trend now={t.sold} before={y.sold} label="yesterday" />{slsh(t.sold, rate) && <div className="small muted">{slsh(t.sold, rate)}</div>}</>} />
+        <button type="button" className="stat stat--link" onClick={() => navigate(path('/shifts'))}>
+          <span className="stat__label">Shifts open now</span><strong className="stat__value">{live.length}</strong>
+          <span className="stat__sub">{live.length ? live.map((x) => x.user_name.split(' ')[0]).join(', ') : 'nobody is working'}{overdue ? ` · ${overdue} overdue` : ''}</span>
         </button>
         <button type="button" className="stat stat--link" onClick={() => navigate(path('/customers'))}>
-          <span className="stat__label">Customers owe</span><strong className="stat__value">{money(owed?.total ?? 0)}</strong>
-          <span className="stat__sub">{owed?.parties ?? 0} customers · open Credit Customers →</span>
+          <span className="stat__label">Customers owe</span><strong className="stat__value">{money(owedTotal)}</strong>
+          <span className="stat__sub">{owed.length} {owed.length === 1 ? 'customer' : 'customers'} · open Credit Customers →</span>
         </button>
-        <Stat label="Exchange rate" value={rate ? `${rate.toLocaleString('en-US')} SLSH` : 'Not set'} sub={rate ? 'for $1' : 'set it in Settings'} />
+        <Stat label="Average per shift (7 days)" value={money(S.shifts ? Math.round(S.total.sold / S.shifts) : 0)} sub={`${S.shifts} shifts · ${rate ? rateText(rate) : 'set the exchange rate in Settings'}`} />
       </section>
-      <div className="grid-2">
+
+      {insights.length > 0 && (
         <div className="panel">
-          <div className="panel__header"><div><p>{s ? `Shift #${s.number}` : 'No shift open'}</p><h2>Xisaab so far</h2></div></div>
-          {s ? <Count s={s} methods={activeMethods} /> : <p className="muted">Open a shift in Sales.</p>}
+          <div className="panel__header"><div><p>In plain words</p><h2><Lightbulb size={16} style={{ verticalAlign: -2 }} /> What the numbers say</h2></div></div>
+          <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 6 }}>{insights.map((x, i) => <li key={i}>{x}</li>)}</ul>
         </div>
-        <div className="panel">
-          <div className="panel__header"><div><p>Balances</p><h2>Money held</h2></div></div>
-          <div className="kv">
-            {balances.map((b: any) => <Fragment key={b.method_id}><span>{b.method_name}</span><span>{money(b.balance)}</span></Fragment>)}
-            <span className="kv-total">Total</span><span className="kv-total">{money(balances.reduce((t: number, b: any) => t + b.balance, 0))}</span>
-          </div>
-        </div>
-      </div>
+      )}
+
+      {live.length > 0 && <LiveBoard live={live} title="Working now" onChanged={reload} />}
+      {!live.length && <div className="mc-note"><Clock size={14} style={{ verticalAlign: -2 }} /> No shift is open right now.</div>}
       {alerts.length > 0 && (
         <div className="panel">
           <div className="panel__header"><div><p>Needs attention</p><h2>Alerts</h2></div></div>
           <div className="form-stack">{alerts.map((a: any, i: number) => <div key={i} className={a.level === 'red' ? 'mc-error' : 'mc-warn'}><strong>{a.title}</strong><div className="small">{a.detail}</div></div>)}</div>
         </div>
       )}
+
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel__header"><div><p>Today</p><h2>How the money came in</h2></div></div>
+          <div className="form-stack">
+            {[...activeMethods.map((m) => ({ key: m.id, name: m.name, v: t.by_method[m.id] ?? 0 })), { key: 'debt', name: 'Customer debts', v: t.debts }].map((x) => (
+              <div key={x.key}><div className="row row--between small"><span>{x.name}</span><span><strong>{money(x.v)}</strong>{t.sold ? ` · ${Math.round((x.v / t.sold) * 100)}%` : ''}</span></div><Bar value={x.v} max={t.sold} /></div>
+            ))}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel__header"><div><p>Balances</p><h2>Money held</h2></div></div>
+          <div className="kv">
+            {balances.map((b: any) => <Fragment key={b.method_id}><span>{b.method_name}</span><span>{money(b.balance)}</span></Fragment>)}
+            <span className="kv-total">Total</span><span className="kv-total">{money(balances.reduce((s: number, b: any) => s + b.balance, 0))}</span>
+          </div>
+          {owed.length > 0 && <>
+            <p className="small muted" style={{ margin: '12px 0 4px' }}>Who owes the most</p>
+            <div className="kv">{owed.slice(0, 3).map((c: any) => <Fragment key={c.id}><span>{c.name}</span><span>{money(c.balance)}</span></Fragment>)}</div>
+          </>}
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel__header"><div><p>Last 7 days</p><h2>Who sold</h2></div></div>
+          <div className="form-stack">
+            {S.people.map((p: any) => (
+              <div key={p.key}><div className="row row--between small"><span><strong>{p.name}</strong> · {p.shifts} {p.shifts === 1 ? 'shift' : 'shifts'}</span><span><strong>{money(p.sold)}</strong> · {money(p.average)}/shift</span></div><Bar value={p.sold} max={S.people[0]?.sold ?? 0} /></div>
+            ))}
+            {!S.people.length && <span className="muted">No sales yet.</span>}
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel__header"><div><p>Last 7 days</p><h2>Which shift sells</h2></div></div>
+          <div className="form-stack">
+            {S.by_shift.map((p: any) => (
+              <div key={p.key}><div className="row row--between small"><span><strong>{p.name}</strong> · {p.shifts} {p.shifts === 1 ? 'shift' : 'shifts'}</span><span><strong>{money(p.sold)}</strong> · {money(p.average)}/shift</span></div><Bar value={p.average} max={Math.max(1, ...S.by_shift.map((x: any) => x.average))} tone="#0ea5e9" /></div>
+            ))}
+            {!S.by_shift.length && <span className="muted">No sales yet.</span>}
+          </div>
+        </div>
+      </div>
+
       <div className="panel">
-        <div className="panel__header"><div><p>Last 7 days</p><h2>Shifts</h2></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/shifts'))}>All shifts →</button></div>
+        <div className="panel__header"><div><p>Last 7 days</p><h2>Day by day</h2></div></div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Date</th><th className="num">Opening</th><th className="num">Sold</th>{week.data.methods.map((m: any) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
+            <thead><tr><th>Date</th><th className="num">Shifts</th><th>Sold</th>{activeMethods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th></tr></thead>
             <tbody>
-              {week.data.shifts.map((x: any) => (
-                <tr key={x.id}><td>{x.number}</td><td>{x.entry_date}</td><td className="num">{money(x.opening_value)}{x.carried_in > 0 && <div className="small muted">incl. {money(x.carried_in)} from #{x.carried_from}</div>}</td><td className="num"><strong>{money(x.sold)}</strong></td>
-                  {week.data.methods.map((m: any) => <td key={m.id} className="num">{money(x.by_method[m.id] ?? 0)}</td>)}<td className="num">{money(x.debts)}</td><td><ShiftStatus s={x} /></td></tr>
+              {S.days.map((x: any) => (
+                <tr key={x.date}><td>{x.date}</td><td className="num">{x.shifts}</td>
+                  <td style={{ minWidth: 150 }}><strong>{money(x.sold)}</strong><Bar value={x.sold} max={maxDay} /></td>
+                  {activeMethods.map((m) => <td key={m.id} className="num">{money(x.by_method[m.id] ?? 0)}</td>)}<td className="num">{money(x.debts)}</td></tr>
               ))}
-              {!week.data.shifts.length && <tr><td colSpan={week.data.methods.length + 6} className="muted">No shifts in the last 7 days.</td></tr>}
+              {!S.days.length && <tr><td colSpan={activeMethods.length + 4} className="muted">No sales in the last 7 days.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -369,62 +461,73 @@ export function FuelDashboard() {
   );
 }
 
-// ── Reports: daily reconciliation ───────────────────────────────
+// ── Reports ─────────────────────────────────────────────────────
 export function FuelReports() {
-  const { today } = useAuth();
+  const { today, activeMethods } = useAuth();
   const [from, setFrom] = useState(today.slice(0, 8) + '01');
   const [to, setTo] = useState(today);
-  const r = useLoad(() => get('/fuel/sessions', { from, to }), [from, to]);
-  const d = r.data;
-  const methods: { id: string; name: string }[] = d?.methods ?? [];
-  // One row per day: all its shifts added up.
-  const days = Object.values((d?.shifts ?? []).reduce((acc: Record<string, any>, s: any) => {
-    const x = acc[s.entry_date] ?? (acc[s.entry_date] = { date: s.entry_date, shifts: 0, open: 0, opening: 0, sold: 0, debts: 0, by: {} as Record<string, number>, left: 0, carried: 0, rate: s.rate, slsh: 0 });
-    x.shifts++; if (s.status === 'open') x.open++;
-    x.opening += s.opening_value - (s.carried_in ?? 0); x.sold += s.sold; x.debts += s.debts; x.left += s.status === 'open' ? s.remaining_now : s.carried ? 0 : s.remaining;
-    if (s.status === 'closed' && s.carried) x.carried += s.remaining;
-    if (s.rate) x.slsh += Math.round((s.sold / 100) * s.rate);
-    for (const m of methods) x.by[m.id] = (x.by[m.id] ?? 0) + (s.by_method[m.id] ?? 0);
-    return acc;
-  }, {})).sort((a: any, b: any) => (a.date < b.date ? 1 : -1)) as any[];
-  const total = (k: string) => days.reduce((t, x) => t + x[k], 0);
-  const totalM = (id: string) => days.reduce((t, x) => t + (x.by[id] ?? 0), 0);
-  const hasRate = days.some((x) => x.rate);
+  const r = useLoad(() => get('/fuel/summary', { from, to }), [from, to]);
+  const S = r.data;
+  const hasRate = Boolean(S?.rates?.length);
+  const slshTotal = (S?.days ?? []).reduce((t: number, d: any) => t + Math.round((d.sold / 100) * (rateOn(S.rates, d.date) ?? 0)), 0);
+  const cell = (x: any, id: string) => <td key={id} className="num">{money(x.by_method[id] ?? 0)}</td>;
   return (
     <div className="module-page">
-      <PageHeader icon={<BarChart3 size={22} />} title="Daily reconciliation" subtitle={`${from} to ${to}`}
+      <PageHeader icon={<BarChart3 size={22} />} title="Reports" subtitle={`${from} to ${to} · Hargeisa time`}
         actions={<button type="button" className="btn btn-secondary btn-sm" onClick={() => window.print()}><Printer size={14} /> Print</button>} />
       <div className="no-print"><DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} /></div>
       <ErrorBox error={r.error} />
-      {d && (
+      {S && (
         <div className="print-area form-stack">
           <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
-          <h3 className="print-only">Meecaad Fuel Station — daily reconciliation {from} to {to}</h3>
+          <h3 className="print-only">Meecaad Fuel Station — sales report {from} to {to}</h3>
           <section className="stat-grid">
-            <Stat label="Sold" value={money(total('sold'))} sub={hasRate ? `${total('slsh').toLocaleString('en-US')} SLSH` : `${d.shifts.length} shifts`} />
-            <Stat label="Received" value={money(total('sold') - total('debts'))} sub={methods.map((m) => `${m.name} ${money(totalM(m.id))}`).join(' · ')} />
-            <Stat label="Customer debts" value={money(total('debts'))} />
-            <Stat label="Not matched" value={money(days.reduce((t, x) => t + Math.abs(x.open ? 0 : x.left), 0))} tone={days.some((x) => !x.open && x.left !== 0) ? 'red' : 'green'} sub="closed shifts that did not match" />
+            <Stat label="Collected" value={money(S.total.sold)} sub={<>{hasRate && `${slshTotal.toLocaleString('en-US')} SLSH · `}<Trend now={S.total.sold} before={S.previous.sold} label="the period before" /></>} />
+            <Stat label="Shifts" value={String(S.shifts)} sub={S.shifts ? `${money(Math.round(S.total.sold / S.shifts))} per shift` : '—'} />
+            <Stat label="Received (cash, Zaad, Edahab)" value={money(S.total.sold - S.total.debts)} sub={activeMethods.map((m) => `${m.name} ${money(S.days.reduce((t: number, d: any) => t + (d.by_method[m.id] ?? 0), 0))}`).join(' · ')} />
+            <Stat label="Given on credit" value={money(S.total.debts)} sub={S.total.sold ? `${Math.round((S.total.debts / S.total.sold) * 100)}% of sales` : '—'} />
           </section>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Date</th><th className="num">Shifts</th><th className="num">New fuel</th><th className="num">Sold</th>{hasRate && <th className="num">Sold (SLSH)</th>}{methods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th><th>Status</th></tr></thead>
-              <tbody>
-                {days.map((x) => (
-                  <tr key={x.date}><td>{x.date}{x.rate && <div className="small muted">{x.rate.toLocaleString('en-US')} SLSH/$</div>}</td><td className="num">{x.shifts}</td>
-                    <td className="num">{money(x.opening)}</td><td className="num"><strong>{money(x.sold)}</strong></td>
-                    {hasRate && <td className="num">{x.slsh ? x.slsh.toLocaleString('en-US') : '—'}</td>}
-                    {methods.map((m) => <td key={m.id} className="num">{money(x.by[m.id] ?? 0)}</td>)}<td className="num">{money(x.debts)}</td>
-                    <td>{x.open ? <StatusBadge label="Shift open" tone="yellow" /> : x.left === 0 ? <StatusBadge label={x.carried ? `Matched · ${money(x.carried)} passed on` : 'Matched'} tone="green" /> : <StatusBadge label={`Not matched ${money(Math.abs(x.left))}`} tone="red" />}</td></tr>
-                ))}
-                {!days.length && <tr><td colSpan={methods.length + 6} className="muted">No shifts in this period.</td></tr>}
-                {days.length > 0 && (
-                  <tr><td><strong>Total</strong></td><td className="num"><strong>{total('shifts')}</strong></td><td className="num"><strong>{money(total('opening'))}</strong></td><td className="num"><strong>{money(total('sold'))}</strong></td>
-                    {hasRate && <td className="num"><strong>{total('slsh').toLocaleString('en-US')}</strong></td>}
-                    {methods.map((m) => <td key={m.id} className="num"><strong>{money(totalM(m.id))}</strong></td>)}<td className="num"><strong>{money(total('debts'))}</strong></td><td></td></tr>
-                )}
-              </tbody>
-            </table>
+
+          <div className="panel"><div className="panel__header"><div><p>By day</p><h2>Daily reconciliation</h2></div></div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th className="num">Shifts</th><th className="num">Collected</th>{hasRate && <th className="num">SLSH</th>}{activeMethods.map((m) => <th key={m.id} className="num">{m.name}</th>)}<th className="num">Debts</th></tr></thead>
+                <tbody>
+                  {S.days.map((x: any) => {
+                    const rate = rateOn(S.rates, x.date);
+                    return (
+                      <tr key={x.date}><td>{x.date}{rate && <div className="small muted">{rate.toLocaleString('en-US')} SLSH/$</div>}</td><td className="num">{x.shifts}</td><td className="num"><strong>{money(x.sold)}</strong></td>
+                        {hasRate && <td className="num">{rate ? Math.round((x.sold / 100) * rate).toLocaleString('en-US') : '—'}</td>}
+                        {activeMethods.map((m) => cell(x, m.id))}<td className="num">{money(x.debts)}</td></tr>
+                    );
+                  })}
+                  {!S.days.length && <tr><td colSpan={activeMethods.length + 5} className="muted">No sales in this period.</td></tr>}
+                  {S.days.length > 0 && (
+                    <tr><td><strong>Total</strong></td><td className="num"><strong>{S.days.reduce((t: number, d: any) => t + d.shifts, 0)}</strong></td><td className="num"><strong>{money(S.total.sold)}</strong></td>
+                      {hasRate && <td className="num"><strong>{slshTotal.toLocaleString('en-US')}</strong></td>}
+                      {activeMethods.map((m) => <td key={m.id} className="num"><strong>{money(S.days.reduce((t: number, d: any) => t + (d.by_method[m.id] ?? 0), 0))}</strong></td>)}
+                      <td className="num"><strong>{money(S.total.debts)}</strong></td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid-2">
+            <div className="panel"><div className="panel__header"><div><p>By salesman</p><h2>Who sold</h2></div></div>
+              <div className="table-wrap"><table>
+                <thead><tr><th>Salesman</th><th className="num">Shifts</th><th className="num">Collected</th><th className="num">Per shift</th><th className="num">Debts</th></tr></thead>
+                <tbody>{S.people.map((p: any) => <tr key={p.key}><td><strong>{p.name}</strong></td><td className="num">{p.shifts}</td><td className="num"><strong>{money(p.sold)}</strong></td><td className="num">{money(p.average)}</td><td className="num">{money(p.debts)}</td></tr>)}
+                  {!S.people.length && <tr><td colSpan={5} className="muted">No sales.</td></tr>}</tbody>
+              </table></div>
+            </div>
+            <div className="panel"><div className="panel__header"><div><p>By shift</p><h2>Morning, evening, night</h2></div></div>
+              <div className="table-wrap"><table>
+                <thead><tr><th>Shift</th><th className="num">Shifts</th><th className="num">Collected</th><th className="num">Per shift</th><th className="num">Debts</th></tr></thead>
+                <tbody>{S.by_shift.map((p: any) => <tr key={p.key}><td><strong>{p.name}</strong></td><td className="num">{p.shifts}</td><td className="num"><strong>{money(p.sold)}</strong></td><td className="num">{money(p.average)}</td><td className="num">{money(p.debts)}</td></tr>)}
+                  {!S.by_shift.length && <tr><td colSpan={5} className="muted">No sales.</td></tr>}</tbody>
+              </table></div>
+            </div>
           </div>
         </div>
       )}
@@ -434,10 +537,42 @@ export function FuelReports() {
 
 // ── Settings ────────────────────────────────────────────────────
 export function FuelSettings() {
+  const [tab, setTab] = useState('rate');
   return (
     <div className="module-page">
-      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Daily exchange rate (USD → Somaliland Shillings)" />
-      <RateSettings />
+      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Exchange rate and shift times" />
+      <div className="panel" style={{ paddingBottom: 0 }}><Tabs tabs={[{ key: 'rate', label: 'Exchange rate' }, { key: 'times', label: 'Shift times' }]} activeTab={tab} onTabChange={setTab} /></div>
+      {tab === 'rate' ? <RateSettings /> : <ShiftTimes />}
+    </div>
+  );
+}
+
+function ShiftTimes() {
+  const t = useLoad(() => get('/fuel/shift-times'), []);
+  const [rows, setRows] = useState<{ name: string; start: string; end: string }[] | null>(null);
+  const list = rows ?? t.data?.times ?? [];
+  const { run, busy } = useSubmit();
+  const set = (i: number, patch: object) => setRows(list.map((r: any, j: number) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="panel form-stack">
+      <div className="panel__header"><div><p>Hargeisa time</p><h2>When each shift works</h2></div></div>
+      <p className="small muted" style={{ margin: 0 }}>When a salesman opens a shift, the shift whose time it is now is chosen. A shift still open after its end time is shown in red to the owner. A night shift can finish the next morning (e.g. 22:00 to 06:00).</p>
+      <ErrorBox error={t.error} />
+      <div className="form-stack">
+        {list.map((r: any, i: number) => (
+          <div key={i} className="role-row" style={{ gridTemplateColumns: '1fr 130px 130px auto' }}>
+            <input className="form-input" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Shift name" />
+            <input className="form-input" type="time" value={r.start} onChange={(e) => set(i, { start: e.target.value })} aria-label={`${r.name} starts`} />
+            <input className="form-input" type="time" value={r.end} onChange={(e) => set(i, { end: e.target.value })} aria-label={`${r.name} ends`} />
+            <button type="button" className="btn btn-ghost btn-xs" disabled={list.length < 2} onClick={() => setRows(list.filter((_: any, j: number) => j !== i))} aria-label="Remove">✕</button>
+          </div>
+        ))}
+      </div>
+      <div className="row row--between">
+        <button type="button" className="btn btn-ghost btn-sm" disabled={list.length >= 6} onClick={() => setRows([...list, { name: '', start: '08:00', end: '16:00' }])}>+ Add a shift</button>
+        <button type="button" className="btn btn-primary" disabled={busy || rows === null || list.some((r: any) => !r.name.trim())}
+          onClick={async () => { if (await run((key) => post('/fuel/shift-times', { times: list }, key), 'Shift times saved')) { setRows(null); t.reload(); } }}>Save shift times</button>
+      </div>
     </div>
   );
 }

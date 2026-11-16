@@ -136,7 +136,7 @@ async function main() {
     'Money & accounts': ['/balances?business=all', `/money?business=all&from=${dayStr(today, 30)}&to=${today}`],
     'Fuel station': ['/fuel/setup', `/fuel/shifts?from=${dayStr(today, 6)}&to=${today}`, '/customers?business=fuel'],
     'Fuel sales / dashboard': ['/fuel/current', `/fuel/sessions?from=${dayStr(today, 6)}&to=${today}`, '/dashboard?business=fuel'],
-    'Fuel daily reconciliation (month)': [`/fuel/sessions?from=${dayStr(today, 30)}&to=${today}`],
+    'Fuel daily reconciliation (month)': [`/fuel/sessions?from=${dayStr(today, 30)}&to=${today}`, `/fuel/summary?from=${dayStr(today, 30)}&to=${today}`],
     'Fuel reconciliation': [`/fuel/reconciliation?from=${dayStr(today, 6)}&to=${today}`],
     'Daily closing': [`/closing/preview?business=store&date=${today}`, '/closing?business=all'],
     'Reports (month)': [`/reports/summary?business=all&from=${month}&to=${today}`],

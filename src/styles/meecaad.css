@@ -194,3 +194,7 @@
 /* Payment method buttons on the fuel Sales screen: 2 × 2 on phones, one row on wide screens */
 .method-picker { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 @media (min-width: 700px) { .method-picker { display: flex; flex-wrap: wrap; } }
+
+/* Small horizontal bar under a number (shares, per-day sales) */
+.bar { height: 7px; border-radius: 99px; background: var(--border); overflow: hidden; margin-top: 4px; min-width: 60px; }
+.bar > span { display: block; height: 100%; border-radius: 99px; }

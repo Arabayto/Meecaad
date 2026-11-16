@@ -5,6 +5,7 @@ import {
   BUSINESS_FEATURES, HttpError, Tx, addDays, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, placeholders, requireBiz, str, today,
   type Ctx,
 } from './lib';
+import { shiftAlerts } from './fuelShifts';
 
 const PNL_ACCOUNTS = ['sales', 'cogs', 'expense', 'stock_loss', 'cash_diff'];
 
@@ -133,14 +134,8 @@ async function buildAlerts(db: D1Database, scope: string[]) {
       detail: `${r.stock_qty} ${r.unit} left (low level ${r.reorder_level})`, link: '/stock' });
   }
   if (scope.includes('fuel')) {
-    // Fuel shifts: still open from an earlier day, or closed without matching.
-    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'open' AND entry_date < ?`, t)) {
-      alerts.push({ level: 'yellow', business: 'fuel', title: `Fuel shift #${r.number} still open since ${r.entry_date}`, detail: 'Do the xisaab xidh (close the shift) in Sales.', link: '/sales' });
-    }
-    for (const r of await all<any>(db, `SELECT * FROM fuel_sessions WHERE business_id = 'fuel' AND status = 'closed' AND remaining <> 0 AND carried = 0 AND entry_date >= ? ORDER BY number DESC LIMIT 10`, addDays(t, -7))) {
-      alerts.push({ level: 'red', business: 'fuel', title: `Fuel shift #${r.number} did not match: ${money(Math.abs(r.remaining))} ${r.remaining > 0 ? 'short' : 'over'}`,
-        detail: `${r.entry_date}: ${r.explanation}`, link: '/shifts' });
-    }
+    // Salesmen's shifts still open after their time (or since an earlier day).
+    for (const x of await shiftAlerts(db, t)) alerts.push({ ...x, business: 'fuel', link: '/shifts' });
   }
   for (const r of await all<any>(db, `SELECT * FROM daily_closings WHERE status = 'closed' AND total_difference <> 0 AND entry_date >= ? AND business_id IN (${p}) ORDER BY entry_date DESC`, addDays(t, -7), ...scope)) {
     alerts.push({ level: r.total_difference < 0 ? 'red' : 'yellow', business: r.business_id, title: `Cash ${r.total_difference < 0 ? 'short' : 'over'} ${money(Math.abs(r.total_difference))} at closing`,

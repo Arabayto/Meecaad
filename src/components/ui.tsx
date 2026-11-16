@@ -302,5 +302,19 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
   );
 }
 
-export const fmtDate = (d: string) => new Date(d.length === 10 ? d + 'T12:00:00Z' : d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-export const fmtTime = (d: string) => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+/** The business runs on Hargeisa time (UTC+3), whatever the phone's own clock says. */
+const TZ = 'Africa/Mogadishu';
+export const fmtDate = (d: string) => new Date(d.length === 10 ? d + 'T12:00:00Z' : d).toLocaleDateString('en-GB', { timeZone: d.length === 10 ? 'UTC' : TZ, day: '2-digit', month: 'short', year: 'numeric' });
+export const fmtTime = (d: string) => new Date(d).toLocaleString('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+/** 06:02 in Hargeisa time. */
+export const fmtClock = (d: string) => new Date(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+/** 3 h 20 min */
+export const fmtDuration = (min: number) => (min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60 ? `${min % 60} min` : ''}`.trim());
+
+/** Reload every few seconds while the page is visible, so phones and the owner's screen stay in step. */
+export function usePolling(reload: () => void, ms: number) {
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === 'visible') reload(); }, ms);
+    return () => clearInterval(t);
+  }, [reload, ms]);
+}

@@ -542,7 +542,7 @@ try {
     sql(`DELETE FROM login_attempts`);   // let the rest of the run sign in again
   });
 
-  await step('fuel station: rate, open shift with the fuel value, sales, xisaab xidh, no money/closing pages', async () => {
+  await step('fuel station: rate, each salesman opens their own shift, money collected, live view, close, shift times, no money/closing pages', async () => {
     // Exchange rate: the manager/owner sets it, the day uses the latest rate on or before it.
     assert.equal((await owner.get('/rates')).current, null);
     for (const bad of ['', 'abc', '0', '-5']) assert.equal((await owner.call('POST', '/rates', { rate: bad })).status, 400, `rate "${bad}"`);
@@ -568,64 +568,87 @@ try {
     assert.equal((await fm.call('GET', '/money?business=fuel')).status, 403);
     assert.ok(!(await owner.get('/dashboard?business=fuel')).alerts.some((a) => a.title === 'Day not closed'));
 
-    // 1. Open the shift with the fuel it works with: 2,000 L worth $2,000.
-    assert.equal((await fc.get('/fuel/current')).shift, null);
-    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 100 })).status, 409, 'no sales before a shift is open');
-    assert.equal((await fc.call('POST', '/fuel/open', { liters: 0, value: 200000 })).status, 400);
-    const sh = await fc.post('/fuel/open', { liters: 2000, value: 200000 });
-    assert.equal((await fm.call('POST', '/fuel/open', { liters: 10, value: 1000 })).status, 409, 'one shift at a time');
-    // 2. Sales: cash, Zaad, Edahab, cash in Shillings at the day's rate, and a customer debt.
+    // Every salesman opens their own shift. The owner does not work shifts.
+    const fc2 = client();
+    await owner.post('/users', { fullName: 'Second Salesman', username: 'fuelc2', password: 'night-key-777', access: { fuel: 'cashier' } });
+    await fc2.post('/auth/login', { username: 'fuelc2', password: 'night-key-777' });
+    const info = await fc.get('/fuel/current');
+    assert.equal(info.mine, null);
+    assert.ok(info.suggested && info.times.length === 3, 'the shift whose time it is now (Hargeisa) is suggested');
+    assert.equal((await owner.call('POST', '/fuel/open', {})).status, 400, 'the owner does not open shifts');
+    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 100 })).status, 409, 'no sales before the shift is open');
+    assert.equal((await fc.call('POST', '/fuel/open', { shiftName: 'Lunch' })).status, 400, 'only the set shifts');
+    const sh = await fc.post('/fuel/open', {});
+    assert.equal((await fc.call('POST', '/fuel/open', {})).status, 409, 'one open shift per salesman');
+    const sh2 = await fc2.post('/fuel/open', { shiftName: 'Night' });   // two salesmen work at the same time
+    assert.equal((await fc.get('/fuel/current')).mine.shift_name, sh.name);
+
+    // Money collected: cash, Zaad, Edahab, cash in Shillings at the day's rate, and a customer debt.
+    const revBefore = (await owner.get('/dashboard?business=fuel')).figures.today.fuel.revenue;
     await fc.post('/fuel/sales', { method: 'cash', amount: 80000 });
     const z = await fc.post('/fuel/sales', { method: 'zaad', amount: 20000 });
     await fc.post('/fuel/sales', { method: 'edahab', amount: 10000 });
     const sl = await fc.post('/fuel/sales', { method: 'cash', slsh: '1,190,000' });   // 1,190,000 ÷ 11,900 = $100.00
-    assert.deepEqual([sl.amount, sl.liters], [10000, 100]);
+    assert.equal(sl.amount, 10000);
     assert.equal((await fc.call('POST', '/fuel/sales', { method: 'zaad', slsh: 50000 })).status, 400, 'only cash in Shillings');
+    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 0 })).status, 400);
+    assert.equal((await fc.call('POST', '/fuel/sales', { customer: 'not-a-customer', amount: 100 })).status, 400, 'the customer must exist');
     await fc.post('/fuel/sales', { customer, amount: 10000 });
-    let cur = await fc.get('/fuel/current');
-    assert.deepEqual([cur.shift.sold, cur.shift.remaining_now, cur.shift.remaining_liters, cur.shift.debts, cur.shift.by_method.cash, cur.sales.length], [130000, 70000, 700, 10000, 90000, 5]);
-    assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 80000 })).status, 400, 'more than the fuel left');
-    // A wrong sale is cancelled by the manager (not the cashier), with a reason.
+    await fc2.post('/fuel/sales', { method: 'cash', amount: 5000 });
+    let mine = (await fc.get('/fuel/current')).mine;
+    assert.deepEqual([mine.sold, mine.count, mine.debts, mine.by_method.cash, mine.by_method.zaad, mine.by_method.edahab], [130000, 5, 10000, 90000, 20000, 10000]);
+    assert.equal((await fc.get('/fuel/current')).live.length, 0, 'a salesman does not see the others');
+    const live = (await fm.get('/fuel/current')).live;
+    assert.deepEqual(live.map((x) => [x.user_name, x.sold]).sort(), [['Fuel Cashier', 130000], ['Second Salesman', 5000]]);
+    assert.equal((await owner.get('/dashboard?business=fuel')).figures.today.fuel.revenue - revBefore, 135000, 'every sale is in the books as it happens');
+
+    // Wrong sale: only a manager/owner cancels it, with a reason.
     assert.equal((await fc.call('POST', `/fuel/sales/${z.id}/void`, { reason: 'x' })).status, 403);
+    assert.equal((await fm.call('POST', `/fuel/sales/${z.id}/void`, {})).status, 400, 'reason required');
     await fm.post(`/fuel/sales/${z.id}/void`, { reason: 'Typed twice' });
-    // 3. Xisaab xidh: not matched yet → needs an explanation; record the rest → matched.
-    assert.equal((await fc.call('POST', '/fuel/close', {})).status, 400);
-    await fc.post('/fuel/sales', { method: 'cash', amount: 90000 });
-    cur = await fc.get('/fuel/current');
-    assert.deepEqual([cur.shift.sold, cur.shift.remaining_now, cur.shift.matched], [200000, 0, true]);
-    const before = (await owner.get('/dashboard?business=fuel')).figures.today.fuel.revenue;
-    const closed = await fc.post('/fuel/close', {});
-    assert.deepEqual([closed.sold, closed.remaining], [200000, 0]);
-    const one = await fm.get(`/fuel/sessions/${sh.id}`);
-    assert.deepEqual([one.status, one.remaining, one.by_method.cash, one.by_method.zaad ?? 0, one.by_method.edahab, one.debts, one.sales.length], ['closed', 0, 180000, 0, 10000, 10000, 6]);
-    assert.equal((await owner.get('/dashboard?business=fuel')).figures.today.fuel.revenue, before, 'sales were already counted as they happened');
     assert.equal((await fm.call('POST', `/fuel/sales/${z.id}/void`, { reason: 'again' })).status, 409);
+    mine = (await fc.get('/fuel/current')).mine;
+    assert.deepEqual([mine.sold, mine.by_method.zaad ?? 0], [110000, 0]);
+
+    // Closing: my own shift; a manager closes someone else's forgotten one; a salesman cannot.
+    assert.equal((await fc.call('POST', '/fuel/close', { shiftId: sh2.id })).status, 403);
+    await fm.post('/fuel/close', { shiftId: sh2.id, note: 'Forgot to close' });
+    await fc.post('/fuel/close', { note: 'Pump 2 was broken' });
+    assert.equal((await fc.call('POST', '/fuel/close', {})).status, 409, 'no open shift any more');
     assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 100 })).status, 409, 'closed: open the next shift first');
-    // The next shift does not match: it closes only with an explanation, and is flagged.
-    await fm.post('/fuel/open', { liters: 100, value: 10000 });
-    await fm.post('/fuel/sales', { method: 'cash', amount: 4000 });
-    const c2 = await fm.post('/fuel/close', { explanation: 'Fuel left for the night shift' });
-    assert.equal(c2.remaining, 6000);
-    assert.equal((await fm.get('/fuel/current')).last.remaining, 6000, 'offered as the next start');
-    const list = await fm.get('/fuel/sessions');
-    assert.equal(list.shifts.length, 2);
-    assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /did not match: \$60\.00 short/.test(a.title)));
-    // Fuel left over can be passed to the next shift: that is not a mismatch, and the next shift must start with it.
-    await fm.post('/fuel/open', { liters: 100, value: 10000 });
-    await fm.post('/fuel/sales', { method: 'cash', amount: 4000 });
-    assert.equal((await fm.call('POST', '/fuel/close', { carry: true, explanation: '' })).status, 200);
-    const passed = (await fm.get('/fuel/current')).last;
-    assert.deepEqual([passed.carried, passed.carried_to, passed.remaining, passed.remaining_liters], [1, null, 6000, 60]);
-    assert.equal((await fm.call('POST', '/fuel/open', { liters: 50, value: 5000 })).status, 400, 'must include what was passed on');
-    assert.equal((await fm.call('POST', '/fuel/open', { liters: 40, value: 20000 })).status, 400, 'litres too');
-    const next = await fm.post('/fuel/open', { liters: 160, value: 16000 });   // the 60 L passed on + 100 L new
-    const shifts = (await fm.get('/fuel/sessions')).shifts;
-    const third = shifts.find((x) => x.number === 3);
-    assert.deepEqual([third.carried, third.carried_to === next.id], [1, true]);
-    const fourth = shifts.find((x) => x.number === 4);
-    assert.deepEqual([fourth.carried_in, fourth.carried_from, shifts.find((x) => x.number === 3).carried_in], [6000, 3, 0], 'passed-on fuel is not counted twice');
-    const titles = (await owner.get('/dashboard?business=fuel')).alerts.map((a) => a.title);
-    assert.ok(titles.some((t) => /shift #2 did not match/.test(t)) && !titles.some((t) => /shift #3/.test(t)), 'passed-on shifts are not flagged');
+    const one = await fm.get(`/fuel/sessions/${sh.id}`);
+    assert.deepEqual([one.status, one.sold, one.debts, one.sales.length, one.note, one.closed_by_name], ['closed', 110000, 10000, 5, 'Pump 2 was broken', 'Fuel Cashier']);
+    assert.equal((await fm.get(`/fuel/sessions/${sh2.id}`)).closed_by_name, 'Fuel Manager');
+    // Who sees what.
+    assert.equal((await fc.get(`/fuel/sessions?from=${today}&to=${today}`)).shifts.length, 1, 'a salesman sees only their own shifts');
+    assert.equal((await fm.get(`/fuel/sessions?from=${today}&to=${today}`)).shifts.length, 2);
+    assert.equal((await fc.call('GET', `/fuel/sessions/${sh2.id}`)).status, 403);
+    assert.equal((await fc.call('GET', '/fuel/summary')).status, 403);
+
+    // Numbers for decisions.
+    const sm = await fm.get(`/fuel/summary?from=${today}&to=${today}`);
+    assert.deepEqual([sm.total.sold, sm.total.debts, sm.shifts, sm.days[0].by_method.cash, sm.days[0].by_method.edahab], [115000, 10000, 2, 95000, 10000]);
+    assert.deepEqual(sm.people.map((p) => [p.name, p.sold, p.shifts, p.average]), [['Fuel Cashier', 110000, 1, 110000], ['Second Salesman', 5000, 1, 5000]]);
+    assert.equal(sm.by_shift.length, 2);
+    assert.ok(sm.previous.from < sm.from);
+
+    // Shift times (Hargeisa): only the manager changes them; bad input is refused.
+    assert.equal((await fc.call('POST', '/fuel/shift-times', { times: [{ name: 'Day', start: '06:00', end: '18:00' }] })).status, 403);
+    for (const times of [[], [{ name: '', start: '06:00', end: '14:00' }], [{ name: 'A', start: '6am', end: '14:00' }], [{ name: 'A', start: '06:00', end: '06:00' }],
+      [{ name: 'A', start: '06:00', end: '14:00' }, { name: 'a', start: '14:00', end: '22:00' }]]) assert.equal((await fm.call('POST', '/fuel/shift-times', { times })).status, 400);
+    await fm.post('/fuel/shift-times', { times: [{ name: 'Day', start: '06:00', end: '18:00' }, { name: 'Night', start: '18:00', end: '06:00' }] });
+    const t2 = await fc.get('/fuel/shift-times');
+    assert.deepEqual([t2.times.length, ['Day', 'Night'].includes(t2.now)], [2, true]);
+
+    // A shift left open from an earlier day is flagged and overdue.
+    const old = await fc2.post('/fuel/open', { shiftName: 'Night' });
+    const yest = new Date(Date.now() - 30 * 3600_000).toISOString();
+    sql(`UPDATE duty_shifts SET opened_at = '${yest}', entry_date = '${new Date(Date.now() - 30 * 3600_000 + 3 * 3600_000).toISOString().slice(0, 10)}' WHERE id = '${old.id}'`);
+    const liveNow = (await fm.get('/fuel/current')).live.find((x) => x.id === old.id);
+    assert.equal(liveNow.overdue, true);
+    assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /Second Salesman's Night shift is still open since/.test(a.title)));
+    await fm.post('/fuel/close', { shiftId: old.id });
+    await fm.post('/fuel/shift-times', { times: [{ name: 'Morning', start: '06:00', end: '14:00' }, { name: 'Evening', start: '14:00', end: '22:00' }, { name: 'Night', start: '22:00', end: '06:00' }] });
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

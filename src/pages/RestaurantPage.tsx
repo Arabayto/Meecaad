@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
-import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useFilters, useLoad, useSubmit, type PayLine } from '../components/ui';
+import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useFilters, useLoad, usePolling, useSubmit, type PayLine } from '../components/ui';
 
 // A picture for items that have none yet, guessed from the name.
 const EMOJI: [RegExp, string][] = [
@@ -25,14 +25,6 @@ export function ItemPicture({ item, size = 64 }: { item: any; size?: number }) {
   return item.image_v
     ? <img className="item-pic" src={`/api/products/${item.id}/image?v=${encodeURIComponent(item.image_v)}`} alt="" style={{ width: size, height: size }} loading="lazy" />
     : <span className="item-pic item-pic--emoji" style={{ width: size, height: size, fontSize: size * 0.55 }}>{itemEmoji(item.name)}</span>;
-}
-
-/** Reload every few seconds while the page is visible, so phones and the kitchen screen stay in step. */
-function usePolling(reload: () => void, ms: number) {
-  useEffect(() => {
-    const t = setInterval(() => { if (document.visibilityState === 'visible') reload(); }, ms);
-    return () => clearInterval(t);
-  }, [reload, ms]);
 }
 
 const since = (iso: string) => {
