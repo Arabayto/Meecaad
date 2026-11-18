@@ -294,6 +294,30 @@ export function PartySelect({ kind, value, onChange, items, onCreated, placehold
   );
 }
 
+/**
+ * A summary card: the figure, and how it changed against the period before
+ * (green when better: higher, or lower for costs with `lowerIsBetter`).
+ */
+export function Kpi({ label, value, now, before, lowerIsBetter, sub, tone }: { label: string; value: ReactNode; now?: number; before?: number; lowerIsBetter?: boolean; sub?: ReactNode; tone?: 'red' | 'green' }) {
+  let trend: ReactNode = null;
+  if (now !== undefined && before !== undefined) {
+    if (before === 0) trend = <span className="kpi__trend muted">{now ? 'nothing before' : 'none'}</span>;
+    else {
+      const pct = Math.round(((now - before) / Math.abs(before)) * 100);
+      const good = lowerIsBetter ? pct <= 0 : pct >= 0;
+      trend = <span className={`kpi__trend ${good ? 'trend--up' : 'trend--down'}`}>{pct >= 0 ? '▲' : '▼'} {Math.abs(pct)}% vs before</span>;
+    }
+  }
+  return (
+    <div className={`stat kpi ${tone ? `stat--${tone}` : ''}`}>
+      <span className="stat__label">{label}</span>
+      <strong className="stat__value">{value}</strong>
+      {trend}
+      {sub && <span className="stat__sub">{sub}</span>}
+    </div>
+  );
+}
+
 export function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: 'red' | 'green' }) {
   return (
     <div className={`stat ${tone ? `stat--${tone}` : ''}`}>

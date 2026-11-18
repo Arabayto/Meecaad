@@ -1,5 +1,7 @@
 import { Fragment, useState } from 'react';
-import { Plus, ShoppingBag, Trash2 } from 'lucide-react';
+import { ListChecks, Plus, ShoppingBag, Trash2 } from 'lucide-react';
+import { Modal } from '../components/Modal';
+import { ExpenseCategories } from '../components/ExpenseCategories';
 import { get, money, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
@@ -25,6 +27,7 @@ export function ExpensesPage() {
   const [lines, setLines] = useState<Row[]>([blank(), blank()]);
   const [date, setDate] = useState(today);
   const [voiding, setVoiding] = useState<any>(null);
+  const [managing, setManaging] = useState(false);
   const { run, busy } = useSubmit();
   const setLine = (i: number, patch: Partial<Row>) => setLines((l) => l.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const filled = lines.filter((r) => r.category.trim() || r.amount);
@@ -55,14 +58,15 @@ export function ExpensesPage() {
 
   return (
     <div className="module-page">
-      <PageHeader icon={<ShoppingBag size={22} />} title={`Expenses — ${businessName(business)}`} subtitle="Running costs of the business (not stock for sale)" />
+      <PageHeader icon={<ShoppingBag size={22} />} title={`Expenses — ${businessName(business)}`} subtitle="Running costs of the business (not stock for sale)"
+        actions={can('catalog') && <button type="button" className="btn btn-secondary" onClick={() => setManaging(true)}><ListChecks size={16} /> Categories</button>} />
       <div className="panel">
         <div className="panel__header">
           <div><p>New · recorded by <strong>{user?.full_name}</strong></p><h2>Record expenses</h2></div>
           <input type="date" className="form-input date-input" value={date} max={today} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
         </div>
         <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
-        {listed.length > 0 && <p className="small muted" style={{ margin: '0 0 8px' }}>Choose the category from the list.{can('catalog') ? ' Add or change categories in Settings → Expense categories.' : ' Ask the manager if a category is missing.'}</p>}
+        {listed.length > 0 && <p className="small muted" style={{ margin: '0 0 8px' }}>Choose the category from the list.{can('catalog') ? ' Add or change categories with the Categories button.' : ' Ask the manager if a category is missing.'}</p>}
         <div className="table-wrap lines-table">
           <table>
             <thead><tr><th>Category</th><th>Details (optional)</th><th>Amount</th><th>Paid with</th><th></th></tr></thead>
@@ -132,6 +136,11 @@ export function ExpensesPage() {
           </table>
         </div>
       </div>
+      {managing && (
+        <Modal open onClose={() => { setManaging(false); cats.reload(); }} title={`Expense categories — ${businessName(business)}`} width="md">
+          <ExpenseCategories business={business} embedded />
+        </Modal>
+      )}
       {voiding && <ReasonModal open onClose={() => setVoiding(null)} title="Cancel expense?" action={`/expenses/${voiding.id}/void`} confirmLabel="Cancel expense"
         message={<>{voiding.category}: {money(voiding.amount)} on {voiding.entry_date}. The money is put back and the expense reversed.</>} onDone={list.reload} />}
     </div>

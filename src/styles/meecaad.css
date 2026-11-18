@@ -235,3 +235,14 @@
   .pos-add .btn { grid-column: 1 / -1; }
   .pos-total .btn { width: 100%; }
 }
+
+/* Summary cards with a comparison against the period before */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.kpi__trend { font-size: 12px; font-weight: 600; }
+
+/* Daily closing: one readable card per money account */
+.closing-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.closing-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; background: var(--bg-card); display: grid; gap: 10px; min-width: 0; }
+.closing-card__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 16px; }
+.closing-card__part { padding-left: 14px; }
+.closing-total { border-top: 1px solid var(--border); padding-top: 12px; max-width: 420px; margin-left: auto; width: 100%; }

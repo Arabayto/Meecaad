@@ -235,6 +235,7 @@ try {
   await step('daily cash closing: difference must be explained, day locks, reopen', async () => {
     const pre = await owner.get(`/closing/preview?business=store&date=${today}`);
     const cash = pre.lines.find((l) => l.method_id === 'cash');
+    assert.ok(pre.sales.count >= 1 && pre.expenses.some((e) => e.category === 'Rent') && pre.purchases.count >= 1 && Array.isArray(pre.topItems));
     assert.equal(cash.opening, 0);
     assert.equal(cash.expected, -12500);   // no opening money was ever put in, so more went out than came in
     assert.deepEqual([cash.sales_in, cash.collections, cash.expenses_out, cash.suppliers_out, cash.transfers], [2500, 3000, -3000, -15000, 0]);
@@ -270,6 +271,19 @@ try {
     const summary = await owner.get('/reports/summary');
     assert.equal(summary.profit.all.profit, 2467);
     assert.equal(summary.topProducts.find((p) => p.product_id === rice).qty, 3);
+    // The store report agrees with the dashboard and the summary.
+    const rep = await owner.get('/reports/business?business=store');
+    assert.equal(rep.profit.revenue, summary.profit.store.revenue);
+    assert.equal(rep.profit.profit, summary.profit.store.profit);
+    assert.equal(rep.products.find((p) => p.product_id === rice).qty, 3);
+    assert.equal(rep.debtors.total, 2000);
+    assert.equal(rep.suppliers.total, 7000);
+    assert.ok(rep.expenses.some((e) => e.category === 'Rent'));
+    assert.ok(rep.previous.to < rep.from && rep.sales.count >= 1);
+    const rc = client();
+    await owner.post('/users', { fullName: 'Store Till', username: 'storetill', password: 'till-word-42', access: { store: 'cashier' } });
+    await rc.post('/auth/login', { username: 'storetill', password: 'till-word-42' });
+    assert.equal((await rc.call('GET', '/reports/business?business=store')).status, 403, 'a cashier cannot open the reports');
   });
 
   await step('permissions: cashier limited to own business and actions', async () => {
@@ -749,7 +763,7 @@ try {
     await fc.post('/fuel/close', {});
   });
 
-  await step('expense categories: registered in advance, chosen from the list; fuel staff record expenses', async () => {
+  await step('expense categories: registered in advance in every business, chosen from the list; fuel staff record expenses', async () => {
     const fc = client(), fm = client();
     await fc.post('/auth/login', { username: 'fuelc', password: 'pump-key-321' });
     await fm.post('/auth/login', { username: 'fuelm', password: 'boss-key-654' });
@@ -768,8 +782,10 @@ try {
     assert.equal((await fc.call('POST', '/expenses', { business: 'fuel', category: 'Security guard', amount: 900, method: 'zaad' })).status, 400, 'hidden: no longer offered');
     assert.ok(!(await fc.get('/expense-categories?business=fuel')).some((c) => c.id === sec));
     assert.ok((await fm.get('/expense-categories?business=fuel')).some((c) => c.id === sec && !c.active), 'the manager still sees it');
-    // Businesses without a list keep free categories (the restaurant).
-    await owner.post('/expenses', { business: 'restaurant', category: 'Anything we like', amount: 100, method: 'cash' });
+    // Every business uses its own list now (restaurant and store too).
+    assert.equal((await owner.call('POST', '/expenses', { business: 'restaurant', category: 'Anything we like', amount: 100, method: 'cash' })).status, 400);
+    for (const b of ['restaurant', 'store']) assert.ok((await owner.get(`/expense-categories?business=${b}`)).some((c) => c.name === 'Rent'), `${b} has a list`);
+    assert.equal((await fm.call('POST', '/expense-categories', { business: 'store', name: 'Hack' })).status, 403, 'a fuel manager does not manage the store list');
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {

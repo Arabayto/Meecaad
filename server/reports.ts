@@ -228,6 +228,73 @@ export async function summary(ctx: Ctx) {
 }
 
 
+// ── Business report (store): everything a shopkeeper looks at ────
+/**
+ * For one business and a period, with the same figures for the period just before:
+ * profit and loss, sales and receipts, best sellers with profit, slow movers, low
+ * stock, sales per cashier, payment methods, expenses, customers, debts, purchases.
+ */
+export async function businessReport(ctx: Ctx) {
+  const business = requireBiz(ctx, ctx.url.searchParams.get('business'), 'reports');
+  const from = ctx.url.searchParams.get('from') || today().slice(0, 8) + '01';
+  const to = ctx.url.searchParams.get('to') || today();
+  const span = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  const pFrom = addDays(from, -span), pTo = addDays(from, -1);
+  const salesStats = (f: string, t: string) => first<any>(ctx.db, `SELECT COUNT(CASE WHEN status = 'completed' THEN 1 END) AS count,
+      COALESCE(SUM(CASE WHEN status = 'completed' THEN total - returned_amount END), 0) AS net, COALESCE(SUM(CASE WHEN status = 'completed' THEN discount END), 0) AS discount,
+      COALESCE(SUM(CASE WHEN status = 'completed' THEN returned_amount END), 0) AS returned, COUNT(CASE WHEN status = 'completed' AND returned_amount > 0 THEN 1 END) AS returns,
+      COUNT(CASE WHEN status = 'voided' THEN 1 END) AS cancelled, COALESCE(SUM(CASE WHEN status = 'voided' THEN total END), 0) AS cancelled_total
+    FROM sales WHERE business_id = ? AND entry_date BETWEEN ? AND ?`, business, f, t);
+  const [profit, prevProfit, stats, prevStats, products, slow, low, stock, cashiers, methods, expenses, daily, customers, debtors, owed, purchases, credit, itemsSold] = await Promise.all([
+    pnl(ctx.db, [business], from, to), pnl(ctx.db, [business], pFrom, pTo),
+    salesStats(from, to), salesStats(pFrom, pTo),
+    all(ctx.db, `SELECT si.product_id, si.name, ROUND(SUM(si.qty - si.returned_qty), 3) AS qty,
+        SUM(ROUND(si.line_total * (1.0 - si.returned_qty / si.qty) * (CASE WHEN s.subtotal > 0 THEN s.total * 1.0 / s.subtotal ELSE 0 END))) AS revenue,
+        SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)) AS cost, COUNT(DISTINCT s.id) AS sales
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.status = 'completed' AND s.business_id = ? AND s.entry_date BETWEEN ? AND ?
+      GROUP BY si.product_id ORDER BY revenue DESC LIMIT 50`, business, from, to),
+    all(ctx.db, `SELECT p.id, p.name, p.unit, p.stock_qty, ROUND(p.stock_qty * p.avg_cost) AS value,
+        (SELECT MAX(s.entry_date) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.status = 'completed') AS last_sold
+      FROM products p WHERE p.business_id = ? AND p.active = 1 AND p.track_stock = 1 AND p.stock_qty > 0
+        AND NOT EXISTS (SELECT 1 FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ?)
+      ORDER BY value DESC LIMIT 15`, business, from, to),
+    all(ctx.db, `SELECT id, name, unit, stock_qty, reorder_level FROM products WHERE business_id = ? AND active = 1 AND track_stock = 1 AND (stock_qty <= 0 OR stock_qty <= reorder_level)
+      ORDER BY stock_qty LIMIT 20`, business),
+    first<any>(ctx.db, `SELECT COUNT(*) AS items, COALESCE(ROUND(SUM(CASE WHEN stock_qty > 0 THEN stock_qty * avg_cost END)), 0) AS value FROM products WHERE business_id = ? AND active = 1 AND track_stock = 1`, business),
+    all(ctx.db, `SELECT u.full_name AS name, COUNT(*) AS count, SUM(s.total - s.returned_amount) AS total FROM sales s JOIN users u ON u.id = s.created_by
+      WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed' GROUP BY s.created_by ORDER BY total DESC`, business, from, to),
+    all(ctx.db, `SELECT pm.name AS method, SUM(t.debit - t.credit) AS total FROM daily_totals t JOIN payment_methods pm ON pm.id = t.method_id
+      WHERE t.business_id = ? AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_sale', 'fuel_sale_void')
+      GROUP BY t.method_id HAVING SUM(t.debit - t.credit) <> 0 ORDER BY pm.sort`, business, from, to),
+    all(ctx.db, `SELECT category, SUM(debit - credit) AS total FROM daily_totals WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'expense'
+      GROUP BY category HAVING SUM(debit - credit) <> 0 ORDER BY total DESC`, business, from, to),
+    all(ctx.db, `SELECT entry_date, -SUM(CASE WHEN account = 'sales' THEN debit - credit ELSE 0 END) AS revenue, -SUM(debit - credit) AS profit
+      FROM daily_totals WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)}) GROUP BY entry_date ORDER BY entry_date`, business, from, to, ...PNL_ACCOUNTS),
+    all(ctx.db, `SELECT c.id, c.name, COUNT(*) AS count, SUM(s.total - s.returned_amount) AS total FROM sales s JOIN customers c ON c.id = s.customer_id
+      WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed' GROUP BY c.id ORDER BY total DESC LIMIT 10`, business, from, to),
+    all(ctx.db, `SELECT c.name, b.balance, b.last_decrease AS last_paid FROM account_balances b JOIN customers c ON c.id = b.customer_id
+      WHERE b.business_id = ? AND b.account = 'receivable' AND b.balance > 0 ORDER BY b.balance DESC LIMIT 10`, business),
+    all(ctx.db, `SELECT s.name, -b.balance AS balance FROM account_balances b JOIN suppliers s ON s.id = b.supplier_id
+      WHERE b.business_id = ? AND b.account = 'payable' AND b.balance < 0 ORDER BY b.balance LIMIT 10`, business),
+    first<any>(ctx.db, `SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total, COALESCE(SUM(paid_amount), 0) AS paid FROM purchases
+      WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND status = 'completed'`, business, from, to),
+    first<any>(ctx.db, `SELECT COALESCE(SUM(debit), 0) AS given, COALESCE(SUM(credit), 0) AS collected FROM daily_totals
+      WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'receivable'`, business, from, to),
+    first<any>(ctx.db, `SELECT COALESCE(ROUND(SUM(si.qty - si.returned_qty), 3), 0) AS qty FROM sale_items si JOIN sales s ON s.id = si.sale_id
+      WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed'`, business, from, to),
+  ]);
+  const [owedTotal, debtTotal] = await Promise.all([
+    first<any>(ctx.db, `SELECT COALESCE(SUM(balance), 0) AS total, COUNT(*) AS count FROM account_balances WHERE business_id = ? AND account = 'receivable' AND balance > 0`, business),
+    first<any>(ctx.db, `SELECT COALESCE(-SUM(balance), 0) AS total, COUNT(*) AS count FROM account_balances WHERE business_id = ? AND account = 'payable' AND balance < 0`, business),
+  ]);
+  return {
+    business, from, to, previous: { from: pFrom, to: pTo, profit: prevProfit[business], sales: prevStats },
+    profit: profit[business], sales: { ...stats, items: itemsSold?.qty ?? 0 }, products, slow, low, stock, cashiers, methods, expenses, daily,
+    customers, debtors: { total: owedTotal?.total ?? 0, count: owedTotal?.count ?? 0, top: debtors },
+    suppliers: { total: debtTotal?.total ?? 0, count: debtTotal?.count ?? 0, top: owed }, purchases, credit,
+  };
+}
+
 /** Every financial transaction, newest first. */
 export async function ledger(ctx: Ctx) {
   const scope = bizScope(ctx, ctx.url.searchParams.get('business'), 'reports');
@@ -265,7 +332,19 @@ export async function closingPreview(ctx: Ctx) {
     first<any>(ctx.db, `SELECT COALESCE(SUM(debit), 0) AS given, COALESCE(SUM(credit), 0) AS collected
                         FROM daily_totals WHERE business_id = ? AND entry_date = ? AND account = 'receivable'`, business, date),
   ]);
-  return { business, date, lines, closing: existing, lastClosed: last?.d ?? null, locked: Boolean(last?.d && date <= last.d), day: dayPnl[business], credit };
+  // The day in plain numbers: sales, returns and cancellations, purchases, and what was spent on what.
+  const [sales, items, purchases, expenses] = await Promise.all([
+    first<any>(ctx.db, `SELECT COUNT(CASE WHEN status = 'completed' THEN 1 END) AS count, COALESCE(SUM(CASE WHEN status = 'completed' THEN total - returned_amount END), 0) AS total,
+        COALESCE(SUM(CASE WHEN status = 'completed' THEN returned_amount END), 0) AS returned, COUNT(CASE WHEN status = 'voided' THEN 1 END) AS cancelled
+      FROM sales WHERE business_id = ? AND entry_date = ?`, business, date),
+    all(ctx.db, `SELECT si.name, ROUND(SUM(si.qty - si.returned_qty), 3) AS qty, SUM(si.line_total) AS amount FROM sale_items si JOIN sales s ON s.id = si.sale_id
+      WHERE s.business_id = ? AND s.entry_date = ? AND s.status = 'completed' GROUP BY si.product_id ORDER BY amount DESC LIMIT 5`, business, date),
+    first<any>(ctx.db, `SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total, COALESCE(SUM(total - paid_amount), 0) AS owed FROM purchases
+      WHERE business_id = ? AND entry_date = ? AND status = 'completed'`, business, date),
+    all(ctx.db, `SELECT category, COUNT(*) AS count, SUM(amount) AS total FROM expenses WHERE business_id = ? AND entry_date = ? AND status = 'completed' GROUP BY category ORDER BY total DESC`, business, date),
+  ]);
+  return { business, date, lines, closing: existing, lastClosed: last?.d ?? null, locked: Boolean(last?.d && date <= last.d), day: dayPnl[business], credit,
+    sales, topItems: items, purchases, expenses };
 }
 
 export async function createClosing(ctx: Ctx) {

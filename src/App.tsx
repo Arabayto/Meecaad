@@ -9,6 +9,7 @@ import { NewOrderPage, OrdersPage } from './pages/RestaurantPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
 import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
 import { OwnerOverview, OwnerReports } from './pages/OwnerPages';
+import { StoreReports } from './pages/StoreReports';
 import { SalesPage } from './pages/SalesPage';
 import { StockPage } from './pages/StockPage';
 import { PurchasesPage } from './pages/PurchasesPage';
@@ -17,7 +18,6 @@ import { PartiesPage } from './pages/PartiesPage';
 import { FuelInventory } from './pages/FuelInventory';
 import { FuelDashboard, FuelReports, FuelSalesPage, FuelSettings, FuelShiftsPage } from './pages/FuelStation';
 import { ClosingPage } from './pages/ClosingPage';
-import { ReportsPage } from './pages/ReportsPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AuditPage } from './pages/AuditPage';
@@ -118,7 +118,7 @@ function PortalPage() {
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     suppliers: [['purchase'], <PartiesPage kind="suppliers" />],
     closing: [['close'], <ClosingPage />],
-    reports: [['reports'], <ReportsPage />],
+    reports: [['reports'], <StoreReports />],
   } as Record<string, [Perm[], JSX.Element]>;
   const entry = pages[page ?? ''];
   if (!entry) return <Navigate to={`/${p}`} replace />;

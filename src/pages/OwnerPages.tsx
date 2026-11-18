@@ -11,7 +11,7 @@ import { get, money } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { Tabs } from '../components/Tabs';
-import { BizTag, DateRange, ErrorBox, PageHeader, Stat, useLoad, usePolling } from '../components/ui';
+import { BizTag, DateRange, ErrorBox, Kpi, PageHeader, Stat, addDays, useLoad, usePolling } from '../components/ui';
 import { Ledger } from './ReportsPage';
 
 const PERIODS = [
@@ -144,7 +144,13 @@ export function OwnerReports() {
   const [from, setFrom] = useState(today.slice(0, 8) + '01');
   const [to, setTo] = useState(today);
   const r = useLoad(() => (tab === 'summary' ? get('/reports/summary', { business: 'all', from, to }) : Promise.resolve(null)), [from, to, tab === 'summary']);
+  // The same length of time just before, to compare with.
+  const span = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  const pFrom = addDays(from, -span), pTo = addDays(from, -1);
+  const prev = useLoad(() => (tab === 'summary' ? get('/reports/summary', { business: 'all', from: pFrom, to: pTo }) : Promise.resolve(null)), [pFrom, pTo, tab === 'summary']);
+  const now = useLoad(() => get('/dashboard', { business: 'all' }), []);
   const s = r.data;
+  const ps = prev.data;
 
   // Per day: sales of each business, total sales, profit.
   const days: any[] = s ? Object.values((s.daily as any[]).reduce((acc: Record<string, any>, x: any) => {
@@ -159,7 +165,14 @@ export function OwnerReports() {
   // How customers paid.
   const paid: [string, number][] = s ? Object.entries((s.methods as any[]).reduce((m: Record<string, number>, x: any) => ({ ...m, [x.method_name]: (m[x.method_name] ?? 0) + x.total }), {})) as [string, number][] : [];
   const credit = s ? { given: sum(s.credit, 'given'), collected: sum(s.credit, 'collected') } : { given: 0, collected: 0 };
-  const all: Pnl = s?.profit.all ?? { revenue: 0, profit: 0 };
+  const all: any = s?.profit.all ?? { revenue: 0, profit: 0, cogs: 0, expenses: 0, losses: 0, cashDiff: 0 };
+  const before: any = ps?.profit.all ?? { revenue: 0, profit: 0, cogs: 0, expenses: 0, losses: 0, cashDiff: 0 };
+  const gross = all.revenue - all.cogs;
+  const owedToUs = sum(now.data?.receivable ?? [], 'total'), weOwe = sum(now.data?.payable ?? [], 'total');
+  const held = sum(now.data?.cash ?? [], 'balance'), stockValue = sum(now.data?.inventory ?? [], 'value');
+  const share = (part: number, whole: number) => (whole ? `${Math.round((part / whole) * 100)}%` : '—');
+  const top = s ? (s.topProducts as any[]).slice(0, 10) : [];
+  const topMax = Math.max(1, ...top.map((x) => x.revenue));
 
   return (
     <div className="module-page">
@@ -175,6 +188,42 @@ export function OwnerReports() {
             <div className="print-area form-stack">
               <img className="print-only print-logo" src="/logo-full.svg" alt="Meecaad" />
               <h3 className="print-only">Meecaad — all businesses — {s.from} to {s.to}</h3>
+
+              <p className="small muted" style={{ margin: 0 }}>{s.from} to {s.to} · compared with {pFrom} to {pTo}</p>
+              <section className="kpi-grid">
+                <Kpi label="Sales" value={money(all.revenue)} now={all.revenue} before={before.revenue} sub="all businesses" />
+                <Kpi label="Gross profit" value={money(gross)} now={gross} before={before.revenue - before.cogs} sub={`margin ${share(gross, all.revenue)} · cost of goods ${money(all.cogs)}`} />
+                <Kpi label="Expenses" value={money(all.expenses)} now={all.expenses} before={before.expenses} lowerIsBetter sub={`${share(all.expenses, all.revenue)} of sales`} />
+                <Kpi label="Net profit" value={money(all.profit)} now={all.profit} before={before.profit} tone={all.profit < 0 ? 'red' : 'green'} sub={`margin ${share(all.profit, all.revenue)}`} />
+              </section>
+              <section className="kpi-grid">
+                <Kpi label="Losses & shortages" value={money(all.losses + all.cashDiff)} now={all.losses + all.cashDiff} before={before.losses + before.cashDiff} lowerIsBetter sub="stock losses + cash short" />
+                <Kpi label="Given on credit" value={money(credit.given)} sub={`paid back ${money(credit.collected)}`} />
+                <Kpi label="Customers owe (now)" value={money(owedToUs)} />
+                <Kpi label="Owed to suppliers (now)" value={money(weOwe)} />
+                <Kpi label="Money held (now)" value={money(held)} sub="cash + mobile, in the records" />
+                <Kpi label="Stock value (now)" value={money(stockValue)} sub="at cost" />
+              </section>
+
+              <section className="owner-cards">
+                {businesses.map((b) => {
+                  const t: any = s.profit[b.id], y: any = ps?.profit[b.id] ?? { revenue: 0, profit: 0 };
+                  return (
+                    <div key={b.id} className="owner-card" style={{ cursor: 'default' }}>
+                      <span className="owner-card__head"><strong>{businessName(b.id)}</strong></span>
+                      <span className="owner-card__label">Sales</span>
+                      <span className="owner-card__big">{money(t.revenue)}</span>
+                      <Trend now={t.revenue} before={y.revenue} label="before" />
+                      <span className="kv owner-card__kv">
+                        <span>Spent</span><span>{money(spent(t))}</span>
+                        <span className="kv-total">Profit</span><span className="kv-total" style={{ color: t.profit < 0 ? '#b91c1c' : '#15803d' }}>{money(t.profit)}</span>
+                        <span>Margin</span><span>{share(t.profit, t.revenue)}</span>
+                        <span>Share of all sales</span><span>{share(t.revenue, all.revenue)}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </section>
 
               <div className="panel">
                 <div className="panel__header"><div><p>{s.from} to {s.to}</p><h2>By business</h2></div></div>
@@ -218,6 +267,24 @@ export function OwnerReports() {
                   </div>
                   {!paid.length && <span className="muted">No sales in this period.</span>}
                 </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel__header"><div><p>Products and dishes</p><h2>Best sellers</h2></div></div>
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Item</th><th>Business</th><th className="num">Sold</th><th>Sales</th><th className="num">Profit</th></tr></thead>
+                    <tbody>
+                      {top.map((x: any) => (
+                        <tr key={x.business_id + x.product_id}><td><strong>{x.name}</strong></td><td><BizTag id={x.business_id} /></td><td className="num">{Number(x.qty.toFixed(3)).toLocaleString('en-US')}</td>
+                          <td style={{ minWidth: 140 }}>{money(x.revenue)}<div className="bar"><span style={{ width: `${Math.max(2, Math.round((x.revenue / topMax) * 100))}%`, background: '#f59e0b' }} /></div></td>
+                          <td className="num">{x.cost ? money(x.revenue - x.cost) : <span className="muted">—</span>}</td></tr>
+                      ))}
+                      {!top.length && <tr><td colSpan={5} className="muted">Nothing sold in this period.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="small muted" style={{ marginTop: 8 }}>Fuel station items are in the fuel station's own reports.</p>
               </div>
 
               <div className="panel">

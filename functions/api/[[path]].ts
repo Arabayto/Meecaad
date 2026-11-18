@@ -119,6 +119,7 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['GET', '/period-locks', shifts.listLocks, ''],
   ['POST', '/period-locks', shifts.lockPeriod, ''],
   ['POST', '/period-locks/:id/unlock', shifts.unlockPeriod, ''],
+  ['GET', '/reports/business', rep.businessReport, ''],
   ['GET', '/closing/preview', rep.closingPreview, 'close'],
   ['GET', '/closing', rep.listClosings, ''],
   ['POST', '/closing', rep.createClosing, 'close'],
