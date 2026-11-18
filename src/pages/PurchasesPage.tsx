@@ -3,20 +3,79 @@ import { Plus, Trash2, Truck } from 'lucide-react';
 import { get, money, num, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
-import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, fmtTime, useLoad, useSubmit } from '../components/ui';
+import { Modal } from '../components/Modal';
+import { DateRange, ErrorBox, Field, Money, MoneyInput, PageHeader, PartySelect, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
 interface Line { product: string; tank: string; qty: string; total: string }
 const blank = (): Line => ({ product: '', tank: '', qty: '', total: '' });
 
 export function PurchasesPage() {
-  const { business, businessName, businesses, today, can, activeMethods } = useAuth();
+  const { business, businessName, businesses, today, can } = useAuth();
   const isFuel = businesses.find((b) => b.id === business)?.kind === 'fuel';
   const products = useLoad(() => get('/products', { business }), [business]);
-  const suppliers = useLoad(() => get('/suppliers', { business }), [business]);
-  const tanks = useLoad(() => (isFuel ? get('/fuel/setup').then((r) => r.tanks) : Promise.resolve([])), [isFuel]);
   const [from, setFrom] = useState(addDays(today, -30));
   const [to, setTo] = useState(today);
   const list = useLoad(() => get('/purchases', { business, from, to }), [business, from, to]);
+  const [creating, setCreating] = useState(false);
+  const [voiding, setVoiding] = useState<any>(null);
+  const filter = useFilters<any>(list.data ?? [], [
+    { key: 'sup', label: 'Supplier', get: (p) => p.supplier_name ?? 'No supplier' },
+    { key: 'status', label: 'Status', get: (p) => (p.status === 'voided' ? 'Cancelled' : p.total - p.paid_amount > 0 ? 'Owed' : 'Paid') },
+  ], (p) => `${p.number} ${p.supplier_name ?? ''} ${p.invoice_ref ?? ''} ${p.items_text ?? ''}`, 'Search #, supplier, invoice, item');
+  const done = filter.shown.filter((p: any) => p.status === 'completed');
+  const spent = done.reduce((t: number, p: any) => t + p.total, 0);
+  const owed = done.reduce((t: number, p: any) => t + p.total - p.paid_amount, 0);
+
+  return (
+    <div className="module-page">
+      <PageHeader icon={<Truck size={22} />} title={`${isFuel ? 'Fuel deliveries' : 'Purchases'} — ${businessName(business)}`}
+        subtitle="Stock bought for selling. Rent, salaries and bills go in Expenses."
+        actions={can('purchase') && <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New {isFuel ? 'delivery' : 'purchase'}</button>} />
+      <div className="panel">
+        <div className="panel__header"><div><p>{done.length} {done.length === 1 ? 'purchase' : 'purchases'} · {money(spent)}{owed > 0 ? ` · ${money(owed)} still owed` : ''}</p><h2>{isFuel ? 'Delivery history' : 'Purchase history'}</h2></div><DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} /></div>
+        <ErrorBox error={list.error} />
+        {filter.bar}
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Date</th><th>Supplier</th><th>Items</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Owed</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {filter.shown.map((p: any) => (
+                <tr key={p.id}>
+                  <td>{p.number}</td>
+                  <td className="small">{p.entry_date}<div className="muted">{p.created_by_name}</div></td>
+                  <td>{p.supplier_name ?? '—'}{p.invoice_ref && <div className="small muted">Inv {p.invoice_ref}</div>}</td>
+                  <td className="small">{p.items_text}</td>
+                  <td className="num"><Money c={p.total} /></td>
+                  <td className="num">{money(p.paid_amount)}{p.method_name && <div className="small muted">{p.method_name}</div>}</td>
+                  <td className="num">{money(p.total - p.paid_amount)}</td>
+                  <td>{p.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : <StatusBadge label="Received" tone="green" />}
+                    {p.void_reason && <div className="small muted">{p.void_reason}</div>}</td>
+                  <td>{can('void') && p.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(p)}>Cancel</button>}</td>
+                </tr>
+              ))}
+              {!list.loading && !filter.shown.length && <tr><td colSpan={9} className="muted">{filter.active ? 'Nothing matches.' : <>Nothing in this period. Use “New {isFuel ? 'delivery' : 'purchase'}” at the top to record stock bought.</>}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {creating && (
+        <Modal open onClose={() => setCreating(false)} title={isFuel ? 'New fuel delivery' : 'New purchase'} width="xl">
+          <PurchaseForm isFuel={isFuel} onDone={() => { setCreating(false); list.reload(); products.reload(); }} />
+        </Modal>
+      )}
+      {voiding && <ReasonModal open onClose={() => setVoiding(null)} title={`Cancel purchase #${voiding.number}?`} action={`/purchases/${voiding.id}/void`} confirmLabel="Cancel purchase"
+        message={<>The stock ({voiding.items_text}) is removed and the money/debt ({money(voiding.total)}) reversed. Recorded {fmtTime(voiding.created_at)}.</>}
+        onDone={() => { list.reload(); products.reload(); }} />}
+    </div>
+  );
+}
+
+/** The purchase form (shown in a window from the New purchase button). */
+function PurchaseForm({ isFuel, onDone }: { isFuel: boolean; onDone: () => void }) {
+  const { business, today, activeMethods } = useAuth();
+  const products = useLoad(() => get('/products', { business }), [business]);
+  const suppliers = useLoad(() => get('/suppliers', { business }), [business]);
+  const tanks = useLoad(() => (isFuel ? get('/fuel/setup').then((r) => r.tanks) : Promise.resolve([])), [isFuel]);
   const [supplier, setSupplier] = useState('');
   const [invoiceRef, setInvoiceRef] = useState('');
   const [date, setDate] = useState(today);
@@ -24,7 +83,6 @@ export function PurchasesPage() {
   const [paid, setPaid] = useState('');
   const [method, setMethod] = useState('cash');
   const [note, setNote] = useState('');
-  const [voiding, setVoiding] = useState<any>(null);
   const { run, busy } = useSubmit();
 
   const stocked = (products.data ?? []).filter((p: any) => p.track_stock && p.active);
@@ -39,17 +97,11 @@ export function PurchasesPage() {
       business, date, supplier: supplier || undefined, invoiceRef, note, paid: paidC, method: paidC > 0 ? method : undefined,
       items: lines.map((l) => ({ product: l.product, tank: l.tank || undefined, qty: Number(l.qty), total: toCents(l.total) })),
     }, key), isFuel ? 'Delivery saved' : 'Purchase saved');
-    if (r) { setLines([blank()]); setPaid(''); setInvoiceRef(''); setNote(''); list.reload(); products.reload(); suppliers.reload(); }
+    if (r) onDone();
   };
 
   return (
-    <div className="module-page">
-      <PageHeader icon={<Truck size={22} />} title={`${isFuel ? 'Fuel deliveries' : 'Purchases'} — ${businessName(business)}`}
-        subtitle="Stock bought for selling. Rent, salaries and bills go in Expenses." />
-
-      <div className="panel">
-        <div className="panel__header"><div><p>New</p><h2>{isFuel ? 'Record a fuel delivery' : 'Record stock bought'}</h2></div></div>
-        <div className="form-stack">
+      <div className="form-stack">
           <div className="form-row-3">
             <Field label="Supplier"><PartySelect kind="suppliers" value={supplier} onChange={setSupplier} items={suppliers.data ?? []} onCreated={suppliers.reload} /></Field>
             <Field label="Invoice / delivery note no."><input className="form-input" value={invoiceRef} onChange={(e) => setInvoiceRef(e.target.value)} /></Field>
@@ -99,37 +151,5 @@ export function PurchasesPage() {
           {paidC > total && <div className="mc-error">Paid is more than the total.</div>}
           <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !ready} onClick={save}>Save {isFuel ? 'delivery' : 'purchase'}</button></div>
         </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel__header"><div><p>History</p><h2>{isFuel ? 'Deliveries' : 'Purchases'}</h2></div><DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} /></div>
-        <ErrorBox error={list.error} />
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>#</th><th>Date</th><th>Supplier</th><th>Items</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Owed</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {(list.data ?? []).map((p: any) => (
-                <tr key={p.id}>
-                  <td>{p.number}</td>
-                  <td className="small">{p.entry_date}<div className="muted">{p.created_by_name}</div></td>
-                  <td>{p.supplier_name ?? '—'}{p.invoice_ref && <div className="small muted">Inv {p.invoice_ref}</div>}</td>
-                  <td className="small">{p.items_text}</td>
-                  <td className="num"><Money c={p.total} /></td>
-                  <td className="num">{money(p.paid_amount)}{p.method_name && <div className="small muted">{p.method_name}</div>}</td>
-                  <td className="num">{money(p.total - p.paid_amount)}</td>
-                  <td>{p.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : <StatusBadge label="Received" tone="green" />}
-                    {p.void_reason && <div className="small muted">{p.void_reason}</div>}</td>
-                  <td>{can('void') && p.status === 'completed' && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setVoiding(p)}>Cancel</button>}</td>
-                </tr>
-              ))}
-              {!list.loading && !list.data?.length && <tr><td colSpan={9} className="muted">Nothing in this period.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      {voiding && <ReasonModal open onClose={() => setVoiding(null)} title={`Cancel purchase #${voiding.number}?`} action={`/purchases/${voiding.id}/void`} confirmLabel="Cancel purchase"
-        message={<>The stock ({voiding.items_text}) is removed and the money/debt ({money(voiding.total)}) reversed. Recorded {fmtTime(voiding.created_at)}.</>}
-        onDone={() => { list.reload(); products.reload(); }} />}
-    </div>
   );
 }

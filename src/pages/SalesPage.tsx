@@ -7,12 +7,16 @@ import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
 import { DateRange, ErrorBox, Field, Money, PageHeader, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
-export function SalesPage() {
+/**
+ * Sales history. On its own page, or `embedded` under the store's point of sale
+ * (starting with today; `refreshKey` changes after each new sale).
+ */
+export function SalesPage({ embedded = false, refreshKey = 0 }: { embedded?: boolean; refreshKey?: number }) {
   const { business, businessName, today, can } = useAuth();
-  const [from, setFrom] = useState(addDays(today, -6));
+  const [from, setFrom] = useState(embedded ? today : addDays(today, -6));
   const [to, setTo] = useState(today);
   const [q, setQ] = useState('');
-  const sales = useLoad(() => get('/sales', { business, from, to, q }), [business, from, to, q]);
+  const sales = useLoad(() => get('/sales', { business, from, to, q }), [business, from, to, q, refreshKey]);
   const [open, setOpen] = useState<any>(null);
   const [voiding, setVoiding] = useState(false);
   const [returning, setReturning] = useState(false);
@@ -32,11 +36,12 @@ export function SalesPage() {
     credit: completed.reduce((s: number, r: any) => s + r.credit_amount, 0),
   };
 
+  const summary = `${totals.count} sales · ${money(totals.sales)} after returns · ${money(totals.credit)} given on credit`;
   return (
-    <div className="module-page">
-      <PageHeader icon={<Receipt size={22} />} title={`Sales history — ${businessName(business)}`}
-        subtitle={`${totals.count} sales · ${money(totals.sales)} after returns · ${money(totals.credit)} given on credit`} />
+    <div className={embedded ? 'form-stack' : 'module-page'}>
+      {!embedded && <PageHeader icon={<Receipt size={22} />} title={`Sales history — ${businessName(business)}`} subtitle={summary} />}
       <div className="panel">
+        {embedded && <div className="panel__header"><div><p>{summary}</p><h2>Sales history</h2></div></div>}
         <div className="row row--between" style={{ marginBottom: 12 }}>
           <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <input className="form-input" style={{ maxWidth: 260 }} placeholder="Search receipt #, item, customer" value={q} onChange={(e) => setQ(e.target.value)} />

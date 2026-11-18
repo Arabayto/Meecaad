@@ -264,7 +264,7 @@ export async function listPurchases(ctx: Ctx) {
   const { from, to } = dateRange(ctx);
   return all(ctx.db,
     `SELECT pu.*, s.name AS supplier_name, pm.name AS method_name, u.full_name AS created_by_name,
-            (SELECT GROUP_CONCAT(pi.qty || ' ' || p.unit || ' ' || p.name, ', ') FROM purchase_items pi JOIN products p ON p.id = pi.product_id WHERE pi.purchase_id = pu.id) AS items_text
+            (SELECT GROUP_CONCAT((CASE WHEN pi.qty = CAST(pi.qty AS INTEGER) THEN CAST(pi.qty AS INTEGER) ELSE pi.qty END) || ' ' || p.unit || ' ' || p.name, ', ') FROM purchase_items pi JOIN products p ON p.id = pi.product_id WHERE pi.purchase_id = pu.id) AS items_text
      FROM purchases pu LEFT JOIN suppliers s ON s.id = pu.supplier_id LEFT JOIN payment_methods pm ON pm.id = pu.method_id JOIN users u ON u.id = pu.created_by
      WHERE pu.business_id IN (${placeholders(scope)}) AND pu.entry_date BETWEEN ? AND ? ORDER BY pu.created_at DESC LIMIT 500`, ...scope, from, to);
 }

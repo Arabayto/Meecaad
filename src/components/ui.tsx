@@ -165,7 +165,9 @@ export function useFilters<T>(rows: T[], defs: FilterDef<T>[], text?: (row: T) =
   const shown = rows.filter((r) => (!needle || !text || text(r).toLowerCase().includes(needle))
     && defs.every((d) => !sel[d.key] || (d.get(r) ?? '') === sel[d.key]));
   const active = Boolean(needle) || defs.some((d) => sel[d.key]);
-  const bar = (
+  // Nothing to search or choose yet (e.g. no rows): show no empty bar.
+  const anySelect = defs.some((d) => sel[d.key] || new Set(rows.map((r) => d.get(r)).filter(Boolean)).size >= 2);
+  const bar = !text && !anySelect && !active ? null : (
     <div className="filter-bar">
       {text && <input className="form-input filter-bar__search" type="search" placeholder={placeholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />}
       {defs.map((d) => {

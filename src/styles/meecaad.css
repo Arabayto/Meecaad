@@ -215,3 +215,23 @@
 .owner-card__label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 6px; }
 .owner-card__big { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
 .owner-card__kv { display: grid; margin-top: 8px; }
+
+/* Store point of sale: a plain form on top (find item · quantity · Add), the lines, then payment */
+.pos-add { display: grid; grid-template-columns: 1fr 110px auto; gap: 8px; align-items: start; }
+.pos-add__search { position: relative; min-width: 0; }
+.pos-add__search .form-input { min-height: 48px; font-size: 16px; }
+.pos-add__qty { min-height: 48px; font-size: 16px; text-align: right; }
+.pos-add .btn { min-height: 48px; }
+.pos-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: 0 10px 30px rgba(0,0,0,0.12); max-height: 320px; overflow: auto; }
+.pos-results--empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
+.pos-results button { display: flex; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 10px; border: 0; background: none; text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px); font: inherit; color: inherit; }
+.pos-results li:first-child button, .pos-results button:hover { background: var(--primary-light, #e8f5e8); }
+.pos-out { color: #b91c1c; }
+.pos-total { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; }
+.pos-total > div { display: grid; }
+.pos-total strong { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .pos-add { grid-template-columns: 1fr 80px; }
+  .pos-add .btn { grid-column: 1 / -1; }
+  .pos-total .btn { width: 100%; }
+}
