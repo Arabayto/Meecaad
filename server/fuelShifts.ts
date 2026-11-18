@@ -203,10 +203,11 @@ export async function createSale(ctx: Ctx) {
   }
   const id = newId();
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run(`INSERT INTO duty_sales (id, shift_id, business_id, entry_date, amount, method_id, customer_id, slsh_amount, rate, note, item_id, item_name, qty, unit_price, price_currency, created_by, created_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  tx.run(`INSERT INTO duty_sales (id, shift_id, business_id, entry_date, amount, method_id, customer_id, slsh_amount, rate, note, item_id, item_name, qty, unit_price, price_currency, unit_cost, created_by, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, shift.id, B, date, amount, method, customer?.id ?? null, slshAmount, rate, str(b.note, 'Note', { max: 200 }),
-    item?.id ?? null, item?.name ?? null, item ? itemQty : null, item?.price ?? null, item?.currency ?? null, ctx.user.id, nowIso());
+    item?.id ?? null, item?.name ?? null, item ? itemQty : null, item?.price ?? null, item?.currency ?? null, item ? item.cost_price : null, ctx.user.id, nowIso());
+  const cost = item?.track_stock ? Math.round(itemQty * item.cost_price) : 0;   // what the goods cost us
   if (item?.track_stock) {
     tx.run('UPDATE fuel_items SET stock_qty = ROUND(stock_qty - ?, 3) WHERE id = ?', itemQty, item.id);
     tx.run(`INSERT INTO fuel_stock_log (id, item_id, entry_date, type, qty, ref_id, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)`, newId(), item.id, date, 'sale', -itemQty!, id, ctx.user.id, nowIso());
@@ -215,6 +216,8 @@ export async function createSale(ctx: Ctx) {
     memo: `Fuel sale${item ? `: ${itemQty} ${item.unit} ${item.name}` : ''} (${shift.shift_name} shift #${shift.number})${customer ? ` on credit to ${customer.name}` : ''}` }, [
     { account: 'sales', amount: -amount },
     debt ? { account: 'receivable', amount, customer: customer!.id } : { account: 'cash', amount, method },
+    { account: 'cogs', amount: cost },
+    { account: 'inventory', amount: -cost },
   ]);
   tx.audit('create', 'fuel_sale', id, B, { amount, method, customer: customer?.name, item: item?.name, qty: itemQty, slsh: slshAmount });
   return tx.commit(idemKey(ctx), { id, amount, qty: itemQty, slsh: slshAmount });
@@ -231,8 +234,11 @@ export async function voidSale(ctx: Ctx) {
   await assertDayOpen(ctx.db, B, date);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE duty_sales SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ? WHERE id = ? AND status = 'completed'`, reason, ctx.user.id, nowIso(), s.id);
-  const sold = s.item_id ? await first<any>(ctx.db, 'SELECT track_stock FROM fuel_items WHERE id = ?', s.item_id) : null;
+  const sold = s.item_id ? await first<any>(ctx.db, 'SELECT track_stock, cost_price FROM fuel_items WHERE id = ?', s.item_id) : null;
   if (sold?.track_stock) {
+    // The goods come back at what they cost; the average cost takes them back in.
+    const back = Math.round(s.qty * (s.unit_cost ?? 0));
+    tx.run(`UPDATE fuel_items SET cost_price = CASE WHEN MAX(stock_qty, 0) + ? > 0.0005 THEN ROUND((MAX(stock_qty, 0) * cost_price + ?) / (MAX(stock_qty, 0) + ?), 6) ELSE cost_price END WHERE id = ?`, s.qty, back, s.qty, s.item_id);
     tx.run('UPDATE fuel_items SET stock_qty = ROUND(stock_qty + ?, 3) WHERE id = ?', s.qty, s.item_id);
     tx.run(`INSERT INTO fuel_stock_log (id, item_id, entry_date, type, qty, ref_id, reason, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)`, newId(), s.item_id, date, 'sale_void', s.qty, s.id, reason, ctx.user.id, nowIso());
   }
@@ -309,7 +315,8 @@ export async function summary(ctx: Ctx) {
       WHERE business_id = ? AND status = 'completed' AND entry_date BETWEEN ? AND ?`, B, pFrom, pTo),
     first<any>(ctx.db, `SELECT COUNT(*) AS n FROM duty_shifts WHERE business_id = ? AND entry_date BETWEEN ? AND ?`, B, pFrom, pTo),
     all(ctx.db, 'SELECT rate_date, rate, set_at FROM exchange_rates WHERE rate_date <= ?', to),
-    all<any>(ctx.db, `SELECT COALESCE(f.item_name, 'Other (no item)') AS name, i.unit, COUNT(*) AS n, ROUND(COALESCE(SUM(f.qty), 0), 3) AS qty, SUM(f.amount) AS amount FROM duty_sales f LEFT JOIN fuel_items i ON i.id = f.item_id
+    all<any>(ctx.db, `SELECT COALESCE(f.item_name, 'Other (no item)') AS name, i.unit, COUNT(*) AS n, ROUND(COALESCE(SUM(f.qty), 0), 3) AS qty, SUM(f.amount) AS amount,
+        SUM(ROUND(COALESCE(f.qty, 0) * COALESCE(f.unit_cost, 0))) AS cost FROM duty_sales f LEFT JOIN fuel_items i ON i.id = f.item_id
       WHERE f.business_id = ? AND f.status = 'completed' AND f.entry_date BETWEEN ? AND ? GROUP BY COALESCE(f.item_name, 'Other (no item)') ORDER BY amount DESC`, B, from, to),
   ]);
   // Group rows (one per method, debts under method_id = null) into { sold, debts, by_method, count }.

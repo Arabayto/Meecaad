@@ -11,11 +11,11 @@ import { BizTag, ErrorBox, Field, PageHeader, fmtTime, useFilters, useLoad, useS
 
 const ROLE_HELP: Record<string, string> = {
   manager: 'Runs this business: sales, expenses, cancellations, menu/products and reports',
-  cashier: 'Takes payments and pays small expenses; closes their own shift',
+  cashier: 'Takes payments and records expenses; works shifts (fuel station: also keeps the inventory)',
   staff: 'Takes orders and payments (store: also stock usage; fuel station: pump readings)',
 };
 const PERM_LABEL: Record<Perm, string> = {
-  sell: 'Take orders & payments', fuel: 'Pump readings', stock: 'Stock', purchase: 'Purchases', expense: 'Record expenses', close: 'Daily closing',
+  sell: 'Take orders & payments', fuel: 'Fuel sales & shifts', stock: 'Inventory & stock', purchase: 'Purchases', expense: 'Record expenses', close: 'Daily closing',
   void: 'Cancel / return / reopen', catalog: 'Menu, products & prices', reports: 'Dashboard, reports & closings', users: 'Users & roles',
 };
 const BIZ_ROLES: BizRole[] = ['manager', 'cashier', 'staff'];

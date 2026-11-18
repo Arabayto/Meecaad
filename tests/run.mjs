@@ -594,7 +594,7 @@ try {
     assert.equal((await fc.call('POST', '/fuel/open', { shiftName: 'Lunch' })).status, 400, 'only the set shifts');
     const sh = await fc.post('/fuel/open', {});
     assert.equal((await fc.call('POST', '/fuel/open', {})).status, 409, 'one open shift per salesman');
-    const sh2 = await fc2.post('/fuel/open', { shiftName: 'Night' });   // two salesmen work at the same time
+    const sh2 = await fc2.post('/fuel/open', { shiftName: info.times.find((t) => t.name !== info.suggested).name });   // two salesmen at the same time, in different shifts
     assert.equal((await fc.get('/fuel/current')).mine.shift_name, sh.name);
 
     // Money collected (before items exist: a plain amount): cash, Zaad, Edahab, and a customer debt.
@@ -664,23 +664,27 @@ try {
     await fm.post('/fuel/shift-times', { times: [{ name: 'Morning', start: '06:00', end: '14:00' }, { name: 'Evening', start: '14:00', end: '22:00' }, { name: 'Night', start: '22:00', end: '06:00' }] });
   });
 
-  await step('fuel inventory: the admin sets prices in $ or SLSH, sales use them, stock follows every sale', async () => {
-    const fc = client(), fm = client();
+  await step('fuel inventory: cost and selling price, staff keep the inventory, stock received is paid or owed, sales count their cost', async () => {
+    const fc = client(), fm = client(), other = client();
     await fc.post('/auth/login', { username: 'fuelc', password: 'pump-key-321' });
     await fm.post('/auth/login', { username: 'fuelm', password: 'boss-key-654' });
-    // Only the manager / owner sets items and prices.
-    assert.equal((await fc.call('POST', '/fuel/items', { name: 'Hack', price: 100, currency: 'USD' })).status, 403);
-    for (const bad of [{ name: '', price: 100 }, { name: 'X', price: 0 }, { name: 'X', price: 100, currency: 'EUR' }, { name: 'X', price: 'abc', currency: 'SLSH' }]) assert.equal((await fm.call('POST', '/fuel/items', bad)).status, 400);
-    const diesel = (await fm.post('/fuel/items', { name: 'Diesel', category: 'Fuel', unit: 'L', currency: 'USD', price: 120, openingQty: 1000, reorderLevel: 100 })).id;   // $1.20 per litre
-    const petrol = (await fm.post('/fuel/items', { name: 'Petrol', category: 'Fuel', unit: 'L', currency: 'SLSH', price: 15000 })).id;          // 15,000 SLSH per litre
-    const oil = (await fm.post('/fuel/items', { name: 'Engine oil', category: 'Oil', unit: 'pcs', currency: 'USD', price: 800, openingQty: 10 })).id;
-    assert.equal((await fm.call('POST', '/fuel/items', { name: 'DIESEL', price: 1, currency: 'USD' })).status, 409, 'names are unique');
-    assert.equal((await fc.get('/fuel/items')).length, 3, 'salesmen see the items and prices');
+    await other.post('/auth/login', { username: 'shiftc', password: 'shift-pass-1' });   // a restaurant cashier
+    // Fuel sales staff manage the inventory; people from other businesses cannot.
+    assert.equal((await other.call('POST', '/fuel/items', { name: 'Hack', price: 100, currency: 'USD' })).status, 403);
+    for (const bad of [{ name: '', price: 100 }, { name: 'X', price: 0 }, { name: 'X', price: 100, currency: 'EUR' }, { name: 'X', price: 'abc', currency: 'SLSH' }, { name: 'X', price: 100, costPrice: -5 }]) assert.equal((await fc.call('POST', '/fuel/items', bad)).status, 400);
+    // Cost price (USD, per unit) and selling price ($ or SLSH). Stock on hand at the start goes into the books at cost.
+    const fuelBefore = (await owner.get('/dashboard?business=fuel')).figures.today.fuel;
+    const diesel = (await fc.post('/fuel/items', { name: 'Diesel', category: 'Fuel', unit: 'L', currency: 'USD', price: 120, costPrice: 95, openingQty: 1000, reorderLevel: 100 })).id;   // costs $0.95, sells $1.20
+    const petrol = (await fc.post('/fuel/items', { name: 'Petrol', category: 'Fuel', unit: 'L', currency: 'SLSH', price: 15000, costPrice: 110 })).id;                  // costs $1.10, sells 15,000 SLSH
+    const oil = (await fm.post('/fuel/items', { name: 'Engine oil', category: 'Oil', unit: 'pcs', currency: 'USD', price: 800, costPrice: 500, openingQty: 10 })).id;
+    assert.equal((await fc.call('POST', '/fuel/items', { name: 'DIESEL', price: 1, currency: 'USD' })).status, 409, 'names are unique');
+    const items = await fc.get('/fuel/items');
+    assert.deepEqual(items.map((i) => [i.name, i.cost_price, i.stock_value]).sort(), [['Diesel', 95, 95000], ['Engine oil', 500, 5000], ['Petrol', 110, 0]]);
     await fc.post('/fuel/open', {});
     assert.equal((await fc.call('POST', '/fuel/sales', { method: 'cash', amount: 100 })).status, 400, 'once items exist a sale must say what was sold');
     assert.equal((await fc.call('POST', '/fuel/sales', { item: 'nope', qty: 1, method: 'cash' })).status, 400);
     assert.equal((await fc.call('POST', '/fuel/sales', { item: diesel, qty: 0, method: 'cash' })).status, 400);
-    // By quantity (the admin's price), by amount, and an item priced in Shillings (converted at the day's rate 11,900).
+    // Sales at the selling price; each one counts what the goods cost.
     const s1 = await fc.post('/fuel/sales', { item: diesel, qty: 10, method: 'cash' });
     assert.deepEqual([s1.amount, s1.qty, s1.slsh], [1200, 10, 142800]);
     const s2 = await fc.post('/fuel/sales', { item: diesel, amount: 2400, method: 'zaad' });
@@ -689,39 +693,83 @@ try {
     assert.deepEqual([s3.amount, s3.slsh], [252, 30000]);                       // 30,000 SLSH ÷ 11,900 = $2.52
     const s4 = await fc.post('/fuel/sales', { item: petrol, amount: 14280, method: 'cash' });
     assert.deepEqual([s4.amount, s4.qty], [120, 0.952]);
-    await fc.post('/fuel/sales', { item: oil, qty: 1, customer });               // a debt for an item
+    await fc.post('/fuel/sales', { item: oil, qty: 1, customer });
+    const f1 = (await owner.get('/dashboard?business=fuel')).figures.today.fuel;
+    // cost of goods: 30 L diesel × 95 + 2.952 L petrol × 110 (rounded per sale: 220 + 105) + 1 oil × 500
+    assert.equal(f1.cogs - fuelBefore.cogs, 2850 + 220 + 105 + 500);
+    assert.equal(f1.revenue - fuelBefore.revenue, 1200 + 2400 + 252 + 120 + 800);
     const stock = async () => Object.fromEntries((await fm.get('/fuel/items')).map((i) => [i.name, i.stock_qty]));
     assert.deepEqual(await stock(), { Diesel: 970, 'Engine oil': 9, Petrol: -2.952 }, 'stock follows each sale (selling is never blocked)');
     assert.ok((await owner.get('/dashboard?business=fuel')).alerts.some((a) => /Petrol stock is below zero/.test(a.title)));
-    // The price is the admin's. A change applies to new sales only.
-    await fm.ok('PATCH', `/fuel/items/${diesel}`, { price: 140 });
+    // The selling price is set on the item. A change applies to new sales only.
+    await fc.ok('PATCH', `/fuel/items/${diesel}`, { price: 140 });
     const s5 = await fc.post('/fuel/sales', { item: diesel, qty: 1, method: 'cash' });
     assert.equal(s5.amount, 140);
-    // Cancelling a sale puts the stock back.
+    // Cancelling a sale puts the stock (and its cost) back.
     await fm.post(`/fuel/sales/${s1.id}/void`, { reason: 'Wrong item' });
-    assert.equal((await stock()).Diesel, 970 - 1 + 10);
-    // Deliveries and counts, with a history.
-    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'received', qty: 5 })).status, 403);
-    await fm.post(`/fuel/items/${diesel}/stock`, { type: 'received', qty: 500, reason: 'Delivery' });
-    assert.equal((await fm.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400 })).status, 400, 'a difference needs a reason');
-    await fm.post(`/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'Evaporation' });
+    assert.equal((await stock()).Diesel, 979);
+    // Stock received: what it cost, paid now or owed to a supplier (staff can add the supplier).
+    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'received', qty: 500, unitCost: 100 })).status, 400, 'say how it was paid');
+    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'received', qty: 500, unitCost: 100, supplier: 'nobody' })).status, 400);
+    const depot = (await fc.post('/suppliers', { business: 'fuel', name: 'Berbera Fuel Depot' })).id;
+    const owedBefore = (await fm.get('/suppliers?business=fuel')).find((x) => x.id === depot)?.balance ?? 0;
+    const rec = await fc.post(`/fuel/items/${diesel}/stock`, { type: 'received', qty: 500, unitCost: 100, supplier: depot, reason: 'Delivery note 77' });
+    assert.equal(rec.total, 50000);
+    assert.equal((await fm.get('/suppliers?business=fuel')).find((x) => x.id === depot).balance - owedBefore, 50000, 'owed to the supplier');
+    const d1 = (await fm.get('/fuel/items')).find((i) => i.id === diesel);
+    assert.deepEqual([d1.stock_qty, d1.cost_price], [1479, Math.round(((979 * 95 + 50000) / 1479) * 1e6) / 1e6], 'average cost');
+    await fc.post(`/fuel/items/${oil}/stock`, { type: 'received', qty: 5, unitCost: 500, method: 'cash' });   // paid in cash
+    // Counts: a difference needs a reason; the loss is recorded at cost.
+    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400 })).status, 400);
+    const lossBefore = (await owner.get('/dashboard?business=fuel')).figures.today.fuel.losses;
+    await fc.post(`/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'Evaporation' });
     assert.equal((await stock()).Diesel, 1400);
-    assert.equal((await fm.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'again' })).status, 400, 'nothing to change');
-    const hist = await fm.get(`/fuel/items/${diesel}/log`);
+    assert.equal((await owner.get('/dashboard?business=fuel')).figures.today.fuel.losses - lossBefore, Math.round(79 * d1.cost_price));
+    assert.equal((await fc.call('POST', `/fuel/items/${diesel}/stock`, { type: 'count', counted: 1400, reason: 'again' })).status, 400, 'nothing to change');
+    const hist = await fc.get(`/fuel/items/${diesel}/log`);
     assert.deepEqual(hist.map((h) => h.type).reverse(), ['received', 'sale', 'sale', 'sale', 'sale_void', 'received', 'count']);
-    // Numbers: per item, and the old sale kept its price.
+    assert.equal(hist[1].supplier_name, 'Berbera Fuel Depot');
+    // Numbers per item: sales, cost of goods, profit on goods.
     const sm = await fm.get(`/fuel/summary?from=${today}&to=${today}`);
     const dsl = sm.by_item.find((x) => x.name === 'Diesel');
-    assert.deepEqual([dsl.qty, dsl.amount], [21, 2540]);
-    assert.ok(sm.by_item.find((x) => x.name === 'Engine oil').amount === 800);
+    assert.deepEqual([dsl.qty, dsl.amount, dsl.cost], [21, 2540, 1995]);
     const shiftId = (await fc.get('/fuel/current')).mine.id;
-    assert.equal((await fm.get(`/fuel/sessions/${shiftId}`)).sales.find((x) => x.id === s2.id).unit_price, 120, 'the price at the time of the sale is kept');
-    // A hidden item cannot be sold; salesmen no longer see it.
-    await fm.ok('PATCH', `/fuel/items/${oil}`, { active: false });
+    const sold = (await fm.get(`/fuel/sessions/${shiftId}`)).sales.find((x) => x.id === s2.id);
+    assert.deepEqual([sold.unit_price, sold.unit_cost], [120, 95], 'the prices at the time of the sale are kept');
+    // A hidden item cannot be sold; it is still listed for the inventory keepers.
+    await fc.ok('PATCH', `/fuel/items/${oil}`, { active: false });
     assert.equal((await fc.call('POST', '/fuel/sales', { item: oil, qty: 1, method: 'cash' })).status, 400);
-    assert.equal((await fc.get('/fuel/items')).length, 2);
-    assert.equal((await fm.get('/fuel/items')).length, 3);
+    assert.equal((await fc.get('/fuel/items')).length, 3);
+    // An item added without a cost: giving it a cost later puts its stock in the books as opening stock (not as profit).
+    const nocost = (await fc.post('/fuel/items', { name: 'Brake fluid', unit: 'pcs', currency: 'USD', price: 300, openingQty: 4 })).id;
+    const pBefore = (await owner.get('/dashboard?business=fuel')).figures.today.fuel.profit;
+    await fc.ok('PATCH', `/fuel/items/${nocost}`, { costPrice: 150 });
+    assert.equal((await fc.get('/fuel/items')).find((i) => i.id === nocost).stock_value, 600);
+    assert.equal((await owner.get('/dashboard?business=fuel')).figures.today.fuel.profit, pBefore, 'no profit from valuing old stock');
     await fc.post('/fuel/close', {});
+  });
+
+  await step('expense categories: registered in advance, chosen from the list; fuel staff record expenses', async () => {
+    const fc = client(), fm = client();
+    await fc.post('/auth/login', { username: 'fuelc', password: 'pump-key-321' });
+    await fm.post('/auth/login', { username: 'fuelm', password: 'boss-key-654' });
+    const cats = await fc.get('/expense-categories?business=fuel');
+    assert.ok(cats.some((c) => c.name === 'Salaries') && cats.length >= 10, 'the fuel station starts with a list');
+    // Staff record expenses, choosing from the list (any capitals); anything else is refused.
+    const e = await fc.post('/expenses', { business: 'fuel', category: 'salaries', amount: 1500, method: 'cash' });
+    assert.equal((await fm.get('/expenses?business=fuel')).find((x) => x.id === e.id).category, 'Salaries');
+    assert.equal((await fc.call('POST', '/expenses', { business: 'fuel', category: 'Random thing', amount: 100, method: 'cash' })).status, 400);
+    // Only the manager / owner manages the list.
+    assert.equal((await fc.call('POST', '/expense-categories', { business: 'fuel', name: 'Security guard' })).status, 403);
+    const sec = (await fm.post('/expense-categories', { business: 'fuel', name: 'Security guard' })).id;
+    assert.equal((await fm.call('POST', '/expense-categories', { business: 'fuel', name: 'security GUARD' })).status, 409);
+    await fc.post('/expenses', { business: 'fuel', category: 'Security guard', amount: 900, method: 'zaad' });
+    await fm.ok('PATCH', `/expense-categories/${sec}`, { active: false });
+    assert.equal((await fc.call('POST', '/expenses', { business: 'fuel', category: 'Security guard', amount: 900, method: 'zaad' })).status, 400, 'hidden: no longer offered');
+    assert.ok(!(await fc.get('/expense-categories?business=fuel')).some((c) => c.id === sec));
+    assert.ok((await fm.get('/expense-categories?business=fuel')).some((c) => c.id === sec && !c.active), 'the manager still sees it');
+    // Businesses without a list keep free categories (the restaurant).
+    await owner.post('/expenses', { business: 'restaurant', category: 'Anything we like', amount: 100, method: 'cash' });
   });
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
@@ -729,8 +777,9 @@ try {
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);
     assert.deepEqual(sql(`SELECT t.id FROM fuel_tanks t WHERE ABS(t.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.tank_id = t.id)) > 0.001`), []);
     const inv = sql(`SELECT business_id, SUM(amount) v FROM journal_lines WHERE account = 'inventory' GROUP BY business_id`);
-    const stock = sql(`SELECT business_id, ROUND(SUM(stock_qty * avg_cost)) v FROM products GROUP BY business_id`);
-    for (const r of inv) assert.ok(Math.abs(r.v - stock.find((s) => s.business_id === r.business_id).v) <= 1, `inventory ledger matches stock for ${r.business_id}`);
+    const stock = sql(`SELECT business_id, ROUND(SUM(v)) v FROM (SELECT business_id, stock_qty * avg_cost AS v FROM products
+      UNION ALL SELECT business_id, stock_qty * cost_price FROM fuel_items) GROUP BY business_id`);
+    for (const r of inv) assert.ok(Math.abs(r.v - stock.find((s) => s.business_id === r.business_id).v) <= 2, `inventory ledger matches stock for ${r.business_id}: ${r.v} vs ${stock.find((s) => s.business_id === r.business_id).v}`);
     assert.equal(sql(`SELECT SUM(amount) s FROM journal_lines WHERE account = 'transfer'`)[0].s ?? 0, 0);
     // The summary tables the screens read must match the full journal exactly.
     assert.deepEqual(sql(`SELECT * FROM (SELECT business_id, account, COALESCE(method_id,'') m, COALESCE(customer_id,'') c, COALESCE(supplier_id,'') s, SUM(amount) v

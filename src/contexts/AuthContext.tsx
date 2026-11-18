@@ -20,8 +20,8 @@ export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports'],
   },
-  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel'] },
-  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
+  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel', 'stock', 'expense'] },
+  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel', 'stock', 'expense'] },
 };
 export const ROLE_LABELS: Record<string, string> = { owner: 'Owner', manager: 'Manager', cashier: 'Cashier', staff: 'Staff' };
 export const PORTALS: Record<PortalId, { name: string; short: string }> = {

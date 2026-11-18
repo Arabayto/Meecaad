@@ -159,15 +159,18 @@ function party(kind: 'customer' | 'supplier') {
   const col = `${kind}_id`;
   const sign = kind === 'customer' ? 1 : -1;
   // Fuel attendants add the customers they give fuel on credit to.
-  // Suppliers exist only where stock is bought (store and fuel station), not in the restaurant.
-  const perms: Perm[] = kind === 'customer' ? ['sell', 'fuel', 'reports'] : ['purchase'];
+  // Suppliers exist only where stock is bought (store and fuel station), not in the restaurant:
+  // whoever buys stock or keeps the inventory can see and add them.
+  const perms: Perm[] = kind === 'customer' ? ['sell', 'fuel', 'reports'] : ['purchase', 'stock'];
   const mayManage = (ctx: Ctx, business: string) => perms.some((p) => can(ctx.user, p, business));
   const linkedTo = async (ctx: Ctx, id: string) =>
     (await all<{ business_id: string }>(ctx.db, `SELECT business_id FROM ${links} WHERE ${col} = ?`, id)).map((r) => r.business_id);
 
   return {
     async list(ctx: Ctx) {
-      const scope = bizScope(ctx, ctx.url.searchParams.get('business'), kind === 'supplier' ? 'purchase' : undefined);
+      // Suppliers: only in businesses where this person buys stock or keeps the inventory.
+      const scope = bizScope(ctx, ctx.url.searchParams.get('business')).filter((b) => kind === 'customer' || mayManage(ctx, b));
+      if (!scope.length) throw new HttpError(403, 'You do not have permission for this action');
       // Balances come from the running totals (account_balances), not the full history.
       // A charge raises a customer's balance but lowers a supplier's (amounts are + debit / − credit).
       const [charge, payment] = kind === 'customer' ? ['last_increase', 'last_decrease'] : ['last_decrease', 'last_increase'];

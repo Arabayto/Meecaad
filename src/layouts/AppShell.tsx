@@ -43,10 +43,12 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
     { label: 'Sales', path: '/sales', icon: Fuel, perms: ['fuel', 'reports'] },
     { label: 'Shifts', path: '/shifts', icon: ClipboardCheck, perms: ['fuel', 'reports'] },
-    { label: 'Inventory', path: '/inventory', icon: PackageSearch, perms: ['catalog'] },
+    { label: 'Inventory', path: '/inventory', icon: PackageSearch, perms: ['stock'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Credit Customers', path: '/customers', icon: UserCheck, perms: ['fuel', 'reports'] },
+    { label: 'Suppliers', path: '/suppliers', icon: Truck, perms: ['purchase', 'stock'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
+    { label: 'Users & Roles', path: '/users', icon: BookOpen, perms: ['users'] },   // owner only
     { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },
   ],
   admin: [

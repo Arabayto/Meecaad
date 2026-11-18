@@ -55,8 +55,8 @@ export const BIZ_ROLE_PERMS: Record<BizRole, Record<string, Perm[]>> = {
     store: ['sell', 'stock', 'purchase', 'expense', 'close', 'void', 'catalog', 'reports'],
     fuel: ['fuel', 'stock', 'purchase', 'expense', 'void', 'catalog', 'reports'],
   },
-  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel'] },   // restaurant cashiers pay small expenses from the drawer
-  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel'] },
+  cashier: { restaurant: ['sell', 'expense'], store: ['sell', 'close'], fuel: ['fuel', 'stock', 'expense'] },   // restaurant cashiers pay small expenses from the drawer
+  staff: { restaurant: ['sell'], store: ['sell', 'stock'], fuel: ['fuel', 'stock', 'expense'] },
 };
 
 export function permsIn(user: User, business: string): Perm[] {

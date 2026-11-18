@@ -17,6 +17,9 @@ export function ExpensesPage() {
   // The restaurant records expenses when they are paid (it has no suppliers).
   const owedAllowed = business !== 'restaurant';
   const suppliers = useLoad(() => (owedAllowed ? get('/suppliers', { business }) : Promise.resolve([])), [business]);
+  // Categories registered in advance (Settings): when the business has a list, it is a dropdown.
+  const cats = useLoad(() => get('/expense-categories', { business }), [business]);
+  const listed: string[] = (cats.data ?? []).filter((c: any) => c.active).map((c: any) => c.name);
   // Several expenses at once: one row each; empty rows are ignored; all are saved together.
   const blank = (method = 'cash'): Row => ({ category: '', description: '', amount: '', method, supplier: '' });
   const [lines, setLines] = useState<Row[]>([blank(), blank()]);
@@ -59,13 +62,17 @@ export function ExpensesPage() {
           <input type="date" className="form-input date-input" value={date} max={today} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
         </div>
         <datalist id="expense-categories">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+        {listed.length > 0 && <p className="small muted" style={{ margin: '0 0 8px' }}>Choose the category from the list.{can('catalog') ? ' Add or change categories in Settings → Expense categories.' : ' Ask the manager if a category is missing.'}</p>}
         <div className="table-wrap lines-table">
           <table>
             <thead><tr><th>Category</th><th>Details (optional)</th><th>Amount</th><th>Paid with</th><th></th></tr></thead>
             <tbody>
               {lines.map((r, i) => (
                 <tr key={i}>
-                  <td><input className="form-input" list="expense-categories" value={r.category} onChange={(e) => setLine(i, { category: e.target.value })} placeholder="Choose or type" /></td>
+                  <td>{listed.length
+                    ? <select className="form-select" value={r.category} onChange={(e) => setLine(i, { category: e.target.value })} aria-label="Category">
+                        <option value="">Choose…</option>{listed.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+                    : <input className="form-input" list="expense-categories" value={r.category} onChange={(e) => setLine(i, { category: e.target.value })} placeholder="Choose or type" />}</td>
                   <td><input className="form-input" value={r.description} onChange={(e) => setLine(i, { description: e.target.value })} placeholder="e.g. salary – Ali" /></td>
                   <td style={{ minWidth: 110 }}><MoneyInput value={r.amount} onChange={(v) => setLine(i, { amount: v })} /></td>
                   <td style={{ minWidth: 150 }}>

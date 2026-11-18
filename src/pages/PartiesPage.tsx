@@ -25,7 +25,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
   const rows = (list.data ?? []).filter((c: any) => (showAll || c.balance !== 0 || search) && (!search || `${c.name} ${c.phone ?? ''}`.toLowerCase().includes(search.toLowerCase())));
   const total = (list.data ?? []).reduce((s: number, c: any) => s + c.balance, 0);
   const canPay = !admin && (isCustomers ? can('sell') || can('fuel') : can('purchase'));
-  const canEdit = isCustomers ? can('sell') || can('fuel') || admin : can('purchase') || admin;
+  const canEdit = isCustomers ? can('sell') || can('fuel') || admin : can('purchase') || can('stock') || admin;
 
   return (
     <div className="module-page">

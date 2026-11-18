@@ -102,7 +102,9 @@ function PortalPage() {
     // The fuel station: sales (open shift → sales → xisaab xidh), shifts, credit customers, reports, settings.
     sales: [['fuel', 'reports'], <FuelSalesPage />],
     shifts: [['fuel', 'reports'], <FuelShiftsPage />],
-    inventory: [['catalog'], <FuelInventory />],
+    inventory: [['stock'], <FuelInventory />],
+    suppliers: [['purchase', 'stock'], <PartiesPage kind="suppliers" />],
+    users: [['users'], <UsersPage />],
     expenses: [['expense'], <ExpensesPage />],
     customers: [['fuel', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <FuelReports />],

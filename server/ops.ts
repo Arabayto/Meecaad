@@ -323,7 +323,14 @@ async function expenseHead(ctx: Ctx) {
 /** Validates one expense and adds it (record, journal entry, audit) to the batch. */
 async function addExpense(ctx: Ctx, tx: Tx, business: string, date: string, b: any) {
   const amount = cents(b.amount, 'Amount', { min: 1 });
-  const category = str(b.category, 'Category', { required: true, max: 60 })!;
+  let category = str(b.category, 'Category', { required: true, max: 60 })!;
+  // A business with a list of expense categories must use one of them.
+  const listed = await all<{ name: string }>(ctx.db, 'SELECT name FROM expense_categories WHERE business_id = ? AND active = 1', business);
+  if (listed.length) {
+    const match = listed.find((c) => c.name.toLowerCase() === category.toLowerCase());
+    if (!match) throw bad(`Choose the category from the list ("${category}" is not one of them)`);
+    category = match.name;
+  }
   const method = b.method ? await paymentMethod(ctx.db, b.method) : null;
   if (!method && business === 'restaurant') throw bad('Restaurant expenses are recorded when they are paid: choose how it was paid');
   const supplier = await partyIn(ctx.db, 'supplier', b.supplier, business);

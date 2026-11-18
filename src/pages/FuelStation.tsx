@@ -8,7 +8,7 @@
 import { Fragment, useState } from 'react';
 import { BarChart3, ClipboardCheck, Clock, Fuel, History, Home, Lightbulb, Play, Printer, RefreshCw, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { get, money, post, toCents } from '../api';
+import { get, money, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
@@ -587,9 +587,11 @@ export function FuelReports() {
 
           <div className="panel"><div className="panel__header"><div><p>By item</p><h2>What was sold</h2></div></div>
             <div className="table-wrap"><table>
-              <thead><tr><th>Item</th><th className="num">Quantity</th><th className="num">Sales</th><th className="num">Share</th></tr></thead>
-              <tbody>{S.by_item.map((p: any) => <tr key={p.name}><td><strong>{p.name}</strong></td><td className="num">{p.unit ? `${num3(p.qty)} ${p.unit}` : '—'}</td><td className="num"><strong>{money(p.amount)}</strong></td><td className="num">{S.total.sold ? `${Math.round((p.amount / S.total.sold) * 100)}%` : '—'}</td></tr>)}
-                {!S.by_item.length && <tr><td colSpan={4} className="muted">No sales.</td></tr>}</tbody>
+              <thead><tr><th>Item</th><th className="num">Quantity</th><th className="num">Sales</th><th className="num">Cost of goods</th><th className="num">Profit on goods</th><th className="num">Share</th></tr></thead>
+              <tbody>{S.by_item.map((p: any) => <tr key={p.name}><td><strong>{p.name}</strong></td><td className="num">{p.unit ? `${num3(p.qty)} ${p.unit}` : '—'}</td><td className="num"><strong>{money(p.amount)}</strong></td>
+                  <td className="num">{p.cost ? money(p.cost) : <span className="muted">—</span>}</td><td className="num" style={{ color: p.amount - p.cost < 0 ? '#b91c1c' : '#15803d' }}>{p.cost ? money(p.amount - p.cost) : <span className="muted">—</span>}</td>
+                  <td className="num">{S.total.sold ? `${Math.round((p.amount / S.total.sold) * 100)}%` : '—'}</td></tr>)}
+                {!S.by_item.length && <tr><td colSpan={6} className="muted">No sales.</td></tr>}</tbody>
             </table></div>
           </div>
 
@@ -620,9 +622,50 @@ export function FuelSettings() {
   const [tab, setTab] = useState('rate');
   return (
     <div className="module-page">
-      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Exchange rate and shift times" />
-      <div className="panel" style={{ paddingBottom: 0 }}><Tabs tabs={[{ key: 'rate', label: 'Exchange rate' }, { key: 'times', label: 'Shift times' }]} activeTab={tab} onTabChange={setTab} /></div>
-      {tab === 'rate' ? <RateSettings /> : <ShiftTimes />}
+      <PageHeader icon={<Settings size={22} />} title="Settings" subtitle="Exchange rate, shift times and expense categories" />
+      <div className="panel" style={{ paddingBottom: 0 }}><Tabs tabs={[{ key: 'rate', label: 'Exchange rate' }, { key: 'times', label: 'Shift times' }, { key: 'cats', label: 'Expense categories' }]} activeTab={tab} onTabChange={setTab} /></div>
+      {tab === 'rate' ? <RateSettings /> : tab === 'times' ? <ShiftTimes /> : <ExpenseCategories business="fuel" />}
+    </div>
+  );
+}
+
+/** Expense categories registered in advance; expenses are chosen from this list. */
+function ExpenseCategories({ business }: { business: string }) {
+  const list = useLoad(() => get('/expense-categories', { business }), [business]);
+  const [name, setName] = useState('');
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const { run, busy } = useSubmit();
+  const add = async () => { if (await run((key) => post('/expense-categories', { business, name }, key), 'Category added')) { setName(''); list.reload(); } };
+  const change = async (id: string, body: object, msg: string) => { if (await run(() => patch(`/expense-categories/${id}`, body), msg)) { setRenaming(null); list.reload(); } };
+  return (
+    <div className="panel form-stack">
+      <div className="panel__header"><div><p>Expenses</p><h2>Expense categories</h2></div></div>
+      <p className="small muted" style={{ margin: 0 }}>Everyone recording an expense chooses one of these. Hidden categories are no longer offered; past expenses keep their category.</p>
+      <div className="row" style={{ gap: 8 }}>
+        <input className="form-input" style={{ flex: '1 1 220px', maxWidth: 360 }} value={name} placeholder="New category, e.g. Security guard" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) add(); }} />
+        <button type="button" className="btn btn-primary" disabled={busy || !name.trim()} onClick={add}>Add category</button>
+      </div>
+      <ErrorBox error={list.error} />
+      <div className="table-wrap">
+        <table>
+          <tbody>
+            {(list.data ?? []).map((c: any) => (
+              <tr key={c.id} style={{ opacity: c.active ? 1 : 0.55 }}>
+                <td>{renaming && renaming.id === c.id
+                  ? <input className="form-input" value={renaming.name} autoFocus onChange={(e) => setRenaming({ id: c.id, name: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && renaming.name.trim()) change(c.id, { name: renaming.name }, 'Renamed'); }} />
+                  : <strong>{c.name}</strong>}{!c.active && <span className="small muted"> (hidden)</span>}</td>
+                <td style={{ textAlign: 'right' }}>
+                  {renaming && renaming.id === c.id
+                    ? <><button type="button" className="btn btn-ghost btn-xs" onClick={() => setRenaming(null)}>Cancel</button><button type="button" className="btn btn-primary btn-xs" disabled={busy || !renaming.name.trim()} onClick={() => change(c.id, { name: renaming.name }, 'Renamed')}>Save</button></>
+                    : <><button type="button" className="btn btn-ghost btn-xs" onClick={() => setRenaming({ id: c.id, name: c.name })}>Rename</button>
+                      <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={() => change(c.id, { active: !c.active }, c.active ? 'Hidden' : 'Shown again')}>{c.active ? 'Hide' : 'Show'}</button></>}
+                </td>
+              </tr>
+            ))}
+            {!list.loading && !list.data?.length && <tr><td className="muted">No categories yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -82,7 +82,7 @@ async function main() {
       }
     }
     // An expense per business, debt payments.
-    for (const biz of ['store', 'restaurant', 'fuel']) await post('/expenses', { business: biz, category: pick(['Salaries', 'Electricity', 'Transport', 'Repairs']), amount: 500 + Math.floor(rnd() * 3000), method: 'cash', date });
+    for (const biz of ['store', 'restaurant', 'fuel']) await post('/expenses', { business: biz, category: pick(['Salaries', 'Electricity', 'Transport', 'Rent']), amount: 500 + Math.floor(rnd() * 3000), method: 'cash', date });
     for (let k = 0; k < 3; k++) {
       const c = pick(customers);
       const owed = (await get(`/customers?business=store`)).find((x) => x.id === c)?.balance ?? 0;
