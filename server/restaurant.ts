@@ -55,10 +55,16 @@ async function openOrder(ctx: Ctx, id: string) {
   return o;
 }
 
-async function tableFree(ctx: Ctx, tableId: unknown, exceptOrder?: string) {
+async function tableById(ctx: Ctx, tableId: unknown) {
   if (!tableId) return null;
   const t = await first<any>(ctx.db, `SELECT * FROM restaurant_tables WHERE id = ? AND business_id = 'restaurant' AND active = 1`, String(tableId));
   if (!t) throw bad('Table not found');
+  return t;
+}
+
+async function tableFree(ctx: Ctx, tableId: unknown, exceptOrder?: string) {
+  const t = await tableById(ctx, tableId);
+  if (!t) return null;
   const busy = await first<any>(ctx.db, `SELECT id FROM open_orders WHERE table_id = ? AND status = 'open' AND id <> ?`, t.id, exceptOrder ?? '');
   if (busy) throw new HttpError(409, `${t.name} already has an open order. Add to that order instead.`);
   return t;
@@ -78,23 +84,40 @@ export async function listOrders(ctx: Ctx) {
   return orders;
 }
 
+/**
+ * A new order. Sent to the kitchen and paid later, or — with `pay` (payments,
+ * discount, customer) — paid at once: the order and its sale in one atomic save.
+ */
 export async function createOrder(ctx: Ctx) {
   requireBiz(ctx, R, 'sell');
   const items = await orderItems(ctx, ctx.body.items);
-  const table = await tableFree(ctx, ctx.body.table);
+  const pay = ctx.body.pay && typeof ctx.body.pay === 'object' ? ctx.body.pay : null;
+  // Paid at once, the order never holds the table; otherwise the table must be free.
+  const table = pay ? await tableById(ctx, ctx.body.table) : await tableFree(ctx, ctx.body.table);
   const label = str(ctx.body.label, 'Name', { max: 60 });   // optional: table or name; every order has a number
+  const note = str(ctx.body.note, 'Note', { max: 300 });
   const id = newId();
   const date = today();
-  const tx = new Tx(ctx.db, ctx.user);
+  let tx: Tx;
+  let sale: string | undefined;
+  if (pay) {
+    const s = await prepareSale(ctx, {
+      ...pay, business: R, items: items.map((i) => ({ product: i.product, qty: i.qty })),
+      note: [table?.name, label, note].filter(Boolean).join(' · ') || null,
+    });
+    tx = s.tx; sale = s.id;
+  } else tx = new Tx(ctx.db, ctx.user);
   // Order numbers restart every day (#1, #2, …) so they are easy to call out.
-  tx.run(`INSERT INTO open_orders (id, table_id, label, note, order_date, number, created_by, created_at, updated_at)
-          VALUES (?,?,?,?,?, (SELECT COALESCE(MAX(number), 0) + 1 FROM open_orders WHERE business_id = 'restaurant' AND order_date = ?), ?,?,?)`,
-    id, table?.id, label, str(ctx.body.note, 'Note', { max: 300 }), date, date, ctx.user.id, nowIso(), nowIso());
+  tx.run(`INSERT INTO open_orders (id, table_id, label, note, order_date, number, status, created_by, created_at, updated_at, closed_by, closed_at)
+          VALUES (?,?,?,?,?, (SELECT COALESCE(MAX(number), 0) + 1 FROM open_orders WHERE business_id = 'restaurant' AND order_date = ?), ?,?,?,?,?,?)`,
+    id, table?.id, label, note, date, date, pay ? 'paid' : 'open', ctx.user.id, nowIso(), nowIso(), pay ? ctx.user.id : null, pay ? nowIso() : null);
   for (const i of items) tx.run('INSERT INTO open_order_items (id, order_id, product_id, qty, note) VALUES (?,?,?,?,?)', newId(), id, i.product, i.qty, i.note);
-  tx.audit('create', 'order', id, R, { table: table?.name, label, items: items.length });
+  if (sale) tx.run('INSERT INTO order_sales (order_id, sale_id) VALUES (?,?)', id, sale);
+  tx.audit('create', 'order', id, R, { table: table?.name, label, items: items.length, paid: Boolean(pay) });
   try {
-    await tx.commit(idemKey(ctx), { id });
-    return first(ctx.db, 'SELECT id, number FROM open_orders WHERE id = ?', id);
+    const r: any = await tx.commit(idemKey(ctx), { id, sale });
+    const row = await first<any>(ctx.db, 'SELECT id, number FROM open_orders WHERE id = ?', r.id);
+    return { ...row, sale: r.sale };
   } catch (e: any) {
     if (String(e?.message).includes('already exists')) throw new HttpError(409, 'That table already has an open order');
     throw e;
@@ -131,11 +154,18 @@ export async function cancelOrder(ctx: Ctx) {
 export async function payOrder(ctx: Ctx) {
   requireBiz(ctx, R, 'sell');
   const o = await openOrder(ctx, ctx.params.id);
-  const items = await all<any>(ctx.db, 'SELECT product_id AS product, qty FROM open_order_items WHERE order_id = ?', o.id);
+  // Items changed at the till just before paying are saved with the payment (one step).
+  const changed = ctx.body.items === undefined ? null : await orderItems(ctx, ctx.body.items);
+  const items = changed ? changed.map((i) => ({ product: i.product, qty: i.qty }))
+    : await all<any>(ctx.db, 'SELECT product_id AS product, qty FROM open_order_items WHERE order_id = ?', o.id);
   const { tx, id } = await prepareSale(ctx, {
     ...ctx.body, business: R, items,
     note: [o.label, o.note, ctx.body.note].filter(Boolean).join(' · ') || null,
   });
+  if (changed) {
+    tx.run('DELETE FROM open_order_items WHERE order_id = ?', o.id);
+    for (const i of changed) tx.run('INSERT INTO open_order_items (id, order_id, product_id, qty, note) VALUES (?,?,?,?,?)', newId(), o.id, i.product, i.qty, i.note);
+  }
   tx.run('INSERT INTO order_sales (order_id, sale_id) VALUES (?,?)', o.id, id);   // primary key: one payment per order
   tx.run(`UPDATE open_orders SET status = 'paid', closed_by = ?, closed_at = ? WHERE id = ? AND status = 'open'`, ctx.user.id, nowIso(), o.id);
   try {

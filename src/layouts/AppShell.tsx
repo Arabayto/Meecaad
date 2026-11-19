@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  BarChart3, BookOpen, ClipboardCheck, ClipboardList, Coffee, FileClock, Fuel, Gauge, Home, LayoutGrid, LogOut, Menu, PackageSearch, Receipt,
+  BarChart3, BookOpen, ClipboardCheck, Coffee, FileClock, Fuel, Gauge, Home, LogOut, Menu, PackageSearch, Receipt,
   Settings, ShoppingBag, ShoppingCart, Store, Truck, UserCheck, Users, Wallet, X,
 } from 'lucide-react';
 import { useAuth, PORTALS, ROLE_LABELS, type Perm, type PortalId } from '../contexts/AuthContext';
@@ -15,10 +15,8 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
   // A simple restaurant: take orders, get paid, keep the menu, expenses and debts.
   restaurant: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
-    { label: 'New Order', path: '/orders', icon: LayoutGrid, perms: ['sell'] },
-    { label: 'Orders', path: '/order-list', icon: ClipboardList, perms: ['sell'] },
+    { label: 'Point of Sale', path: '/pos', icon: ShoppingCart, perms: ['sell'] },   // orders, payment and sales history on one page
     { label: 'Close My Shift', path: '/shift', icon: Wallet, perms: ['sell'], notOwner: true },   // the owner has no shift
-    { label: 'Sales History', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
     { label: 'Menu', path: '/menu', icon: Coffee, perms: ['catalog'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },

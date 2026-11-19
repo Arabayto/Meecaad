@@ -70,7 +70,7 @@ export function RestaurantDashboard() {
       </section>
 
       <section className="stat-grid">
-        <button type="button" className="stat stat--link" onClick={() => navigate(path('/order-list'))}>
+        <button type="button" className="stat stat--link" onClick={() => navigate(path('/pos'))}>
           <span className="stat__label">Waiting to be paid</span>
           <strong className="stat__value">{pending.length} {pending.length === 1 ? 'order' : 'orders'}</strong>
           <span className="stat__sub">{money(sum(pending, 'total'))} · open Orders →</span>
@@ -101,7 +101,7 @@ export function RestaurantDashboard() {
         </div>
         <div className="panel">
           <div className="panel__header"><div><p>Today</p><h2>Latest sales</h2></div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/sales'))}>All sales</button></div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(path('/pos'))}>All sales</button></div>
           {!(latest.data ?? []).length ? <p className="muted">No sales today yet.</p> : (
             <ul className="rank-list">
               {latest.data.slice(0, 8).map((x: any) => (

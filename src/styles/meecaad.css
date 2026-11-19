@@ -246,3 +246,38 @@
 .closing-card__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 16px; }
 .closing-card__part { padding-left: 14px; }
 .closing-total { border-top: 1px solid var(--border); padding-top: 12px; max-width: 420px; margin-left: auto; width: 100%; }
+
+/* Restaurant till (one page): open-order chips, compact menu, inline payment */
+.rpos-orders { display: grid; gap: 10px; padding: 12px 14px; }
+.rpos-orders__head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.rpos-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.rpos-chip { flex: 0 0 auto; display: grid; grid-template-columns: auto auto; column-gap: 8px; row-gap: 1px; align-items: baseline; text-align: left; border: 1px solid var(--border); background: var(--bg-card); color: inherit; border-radius: var(--radius-md); padding: 8px 12px; cursor: pointer; font: inherit; min-width: 120px; transition: border-color var(--transition); }
+.rpos-chip:hover { border-color: var(--primary); }
+.rpos-chip.active { border-color: var(--primary); background: var(--primary-lighter); box-shadow: inset 0 0 0 1px var(--primary); }
+.rpos-chip strong { font-size: 15px; }
+.rpos-chip__who { font-size: 13px; color: var(--text-muted); white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.rpos-chip__amt { font-weight: 800; color: var(--primary-dark); font-variant-numeric: tabular-nums; }
+.rpos-chip__age { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.rpos-chip--new { display: inline-flex; align-items: center; gap: 6px; border-style: dashed; font-weight: 700; min-width: 0; }
+.rpos-chip--new.active { border-style: solid; }
+.rpos-chip__badge { background: var(--primary); color: #fff; border-radius: 10px; padding: 0 7px; font-size: 12px; }
+.menu-grid--compact { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+.menu-grid--compact .menu-tile__main { padding: 10px 6px 8px; }
+.menu-grid--compact .menu-tile__main strong { font-size: 13px; }
+.menu-tile__count { position: absolute; top: 6px; right: 6px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; background: var(--primary); color: #fff; font-weight: 800; font-size: 13px; display: grid; place-items: center; pointer-events: none; }
+.qty-box__n { min-width: 28px; text-align: center; font-weight: 800; }
+.qty-box button { display: grid; place-items: center; }
+.rpos-cart { max-height: calc(100vh - 24px); overflow: auto; }
+.rpos-done { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--radius-md); background: var(--primary-lighter); color: var(--primary-dark); font-weight: 600; font-size: 14px; }
+.rpos-done > span { flex: 1; min-width: 140px; }
+.rpos-more summary { cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 2px 0; }
+.rpos-more[open] summary { margin-bottom: 8px; }
+.rpos-pay { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.rpos-pay .method-picker { grid-template-columns: repeat(2, 1fr); display: grid; }
+.rpos-change { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+.rpos-change > div { display: grid; text-align: right; padding-bottom: 8px; }
+.rpos-change strong { font-size: 20px; }
+.rpos-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.rpos-paybtn { min-height: 52px; font-size: 16px; }
+@media (max-width: 1024px) { .rpos-cart { max-height: none; overflow: visible; } }
+.rpos-links .btn { width: auto !important; }

@@ -5,7 +5,7 @@ import { LoginPage } from './pages/LoginPage';
 import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
-import { NewOrderPage, OrdersPage } from './pages/RestaurantPage';
+import { RestaurantPOS } from './pages/RestaurantPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
 import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
 import { OwnerOverview, OwnerReports } from './pages/OwnerPages';
@@ -88,9 +88,11 @@ function PortalPage() {
     audit: [['users'], <AuditPage />],
   } : p === 'restaurant' ? {
     // A simple restaurant: orders, sales, menu, expenses, customers, reports.
-    orders: [['sell'], <NewOrderPage />],
-    'order-list': [['sell'], <OrdersPage />],
-    sales: [['sell', 'reports'], <SalesPage />],
+    // One page for the whole sale: menu, order, payment, open orders and today's sales.
+    pos: [['sell'], <RestaurantPOS />],
+    orders: [['sell'], <Navigate to="/restaurant/pos" replace />],
+    'order-list': [['sell'], <Navigate to="/restaurant/pos" replace />],
+    sales: [['sell', 'reports'], <Navigate to="/restaurant/pos" replace />],
     menu: [['catalog'], <StockPage view="menu" />],
     expenses: [['expense'], <ExpensesPage />],
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],

@@ -1,15 +1,14 @@
-// Restaurant & Cafe POS: the waiter taps pictures to build an order and sends it
-// (Pending). When the customer pays, the cashier takes the payment and the
-// order becomes a sale.
+// Restaurant & Cafe till — everything on one page: tap the menu, then either
+// Pay now or Send to the kitchen and pay later; open orders sit at the top
+// (tap one to add items or take its payment); today's sales are underneath.
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ClipboardList, Minus, Plus, Printer, Send, Trash2 } from 'lucide-react';
+import { CheckCircle2, Minus, Plus, Printer, Send, Trash2, X } from 'lucide-react';
 import { fromCents, get, money, num, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
-import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
-import { ErrorBox, Field, MoneyInput, PageHeader, PartySelect, PaymentsEditor, ReasonModal, useFilters, useLoad, usePolling, useSubmit, type PayLine } from '../components/ui';
+import { ErrorBox, Field, MoneyInput, PartySelect, PaymentsEditor, ReasonModal, useLoad, usePolling, useSubmit, type PayLine } from '../components/ui';
+import { SalesPage } from './SalesPage';
 
 // A picture for items that have none yet, guessed from the name.
 const EMOJI: [RegExp, string][] = [
@@ -33,194 +32,286 @@ const since = (iso: string) => {
 };
 const orderTitle = (o: any) => `#${o.number ?? '—'}${o.table_name ? ` · ${o.table_name}` : ''}${o.label ? ` · ${o.label}` : ''}`;
 
-// ── New order ───────────────────────────────────────────────────
-interface Draft { key: string; lines: Record<string, number>; table: string; label: string; note: string }
-const newDraft = (): Draft => ({ key: crypto.randomUUID(), lines: {}, table: '', label: '', note: '' });
-const DRAFTS = 'mc_restaurant_drafts';
-function loadDrafts(): Draft[] {
+// ── The till ────────────────────────────────────────────────────
+type Lines = Record<string, number>;
+interface Draft { lines: Lines; table: string; label: string; note: string }
+const emptyDraft = (): Draft => ({ lines: {}, table: '', label: '', note: '' });
+const DRAFT = 'mc_restaurant_draft';
+function loadDraft(): Draft {
   try {
-    const d = JSON.parse(localStorage.getItem(DRAFTS) ?? 'null');
-    if (Array.isArray(d) && d.length && d.every((x) => x && typeof x.key === 'string' && x.lines)) return d;
+    const d = JSON.parse(localStorage.getItem(DRAFT) ?? 'null');
+    if (d && typeof d.lines === 'object') return { ...emptyDraft(), ...d };
   } catch { /* storage unavailable */ }
-  return [newDraft()];
+  return emptyDraft();
 }
-function saveDrafts(d: Draft[]) {
-  try { localStorage.setItem(DRAFTS, JSON.stringify(d)); } catch { /* storage unavailable */ }
-}
-export function NewOrderPage() {
-  const { path } = useAuth();
-  const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const editId = params.get('order');
+const sameLines = (a: Lines, b: Lines) => {
+  const ka = Object.keys(a).filter((k) => a[k] > 0), kb = Object.keys(b).filter((k) => b[k] > 0);
+  return ka.length === kb.length && ka.every((k) => a[k] === b[k]);
+};
+
+export function RestaurantPOS() {
+  const { today, activeMethods } = useAuth();
   const products = useLoad(() => get('/products', { business: 'restaurant' }), []);
   const tables = useLoad(() => get('/restaurant/tables'), []);
-  const editing = useLoad(() => (editId ? get('/restaurant/orders').then((l: any[]) => l.find((o) => o.id === editId) ?? null) : Promise.resolve(null)), [editId]);
+  const orders = useLoad(() => get('/restaurant/orders'), []);
+  const customers = useLoad(() => get('/customers', { business: 'restaurant' }), []);
+  usePolling(orders.reload, 10000);
+
+  // The new order being taken (kept on this device if the page reloads) …
+  const [draft, setDraft] = useState<Draft>(loadDraft);
+  useEffect(() => { try { localStorage.setItem(DRAFT, JSON.stringify(draft)); } catch { /* storage unavailable */ } }, [draft]);
+  // … or an open order picked from the top (its items can be changed before paying).
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<Draft | null>(null);
+  const order = openId ? (orders.data ?? []).find((o: any) => o.id === openId) ?? null : null;
+  const cur = order && edit ? edit : draft;
+  const setCur = (fn: (d: Draft) => Draft) => (order ? setEdit((e) => fn(e ?? emptyDraft())) : setDraft(fn));
+
+  // Payment: one tap on the method; discount, split and cash-given only when needed.
+  const [method, setMethod] = useState('cash');
+  const [customer, setCustomer] = useState('');
+  const [discount, setDiscount] = useState('');
+  const [showDiscount, setShowDiscount] = useState(false);
+  const [split, setSplit] = useState<PayLine[] | null>(null);
+  const [given, setGiven] = useState('');
+  const resetPay = () => { setMethod('cash'); setCustomer(''); setDiscount(''); setShowDiscount(false); setSplit(null); setGiven(''); };
+
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
-  // One draft per client, so orders for several clients can be taken side by side.
-  // Drafts stay on this device (if the page reloads). Each draft's key is also its
-  // idempotency key: a retried send can never create the same order twice.
-  const [drafts, setDrafts] = useState<Draft[]>(() => (editId ? [newDraft()] : loadDrafts()));
-  const [active, setActive] = useState(0);
-  const at = Math.min(active, drafts.length - 1);
-  const cur = drafts[at];
-  const update = (patch: (d: Draft) => Partial<Draft>) => setDrafts((ds) => ds.map((d, i) => (i === at ? { ...d, ...patch(d) } : d)));
-  const { lines, table, label, note } = cur;
-  const setLines = (fn: (l: Record<string, number>) => Record<string, number>) => update((d) => ({ lines: fn(d.lines) }));
-  const setTable = (table: string) => update(() => ({ table }));
-  const setLabel = (label: string) => update(() => ({ label }));
-  const setNote = (note: string) => update(() => ({ note }));
-  useEffect(() => { if (!editId) saveDrafts(drafts); }, [drafts, editId]);
-  const [sent, setSent] = useState<any[] | null>(null);
+  const [done, setDone] = useState<{ text: string; sale?: any; ticket?: any } | null>(null);
+  const [printing, setPrinting] = useState<{ sale?: any; ticket?: any } | null>(null);
+  const [cancelling, setCancelling] = useState<any>(null);
+  const [saved, setSaved] = useState(0);
   const { run, busy } = useSubmit();
-
-  // Adding to an existing order: start from what it already has.
-  useEffect(() => {
-    const o = editing.data;
-    if (o) setDrafts([{ key: o.id, lines: Object.fromEntries(o.items.map((i: any) => [i.product_id, i.qty])), table: o.table_id ?? '', label: o.label ?? '', note: o.note ?? '' }]);
-  }, [editing.data]);
 
   const menu = (products.data ?? []).filter((p: any) => p.kind === 'menu' && p.active);
   const categories = [...new Set(menu.map((p: any) => p.category).filter(Boolean))] as string[];
   const shown = menu.filter((p: any) => (!category || p.category === category) && (!search || p.name.toLowerCase().includes(search.toLowerCase())));
-  // In the order the waiter tapped them.
-  const itemsOf = (d: Draft) => Object.keys(d.lines).filter((id) => d.lines[id] > 0).map((id) => menu.find((p: any) => p.id === id)).filter(Boolean);
-  const chosen = itemsOf(cur);
-  const ready = drafts.filter((d) => itemsOf(d).length > 0);
-  const draftName = (d: Draft, i: number) => d.label || (tables.data ?? []).find((t: any) => t.id === d.table)?.name || `Client ${i + 1}`;
-  const total = useMemo(() => chosen.reduce((s: number, p: any) => s + Math.round(lines[p.id] * p.sale_price), 0), [chosen, lines]);
-  const count = chosen.reduce((s: number, p: any) => s + lines[p.id], 0);
-  const add = (id: string, d: number) => setLines((l) => ({ ...l, [id]: Math.max(0, Math.round(((l[id] ?? 0) + d) * 1000) / 1000) }));
-  /** Remove a draft (keep at least one empty one). */
-  const drop = (key: string) => setDrafts((ds) => (ds.length > 1 ? ds.filter((d) => d.key !== key) : [newDraft()]));
-  const clear = () => drop(cur.key);
-  const addClient = () => { setDrafts((ds) => [...ds, newDraft()]); setActive(drafts.length); };
+  const chosen = Object.keys(cur.lines).filter((id) => cur.lines[id] > 0).map((id) => {
+    const p: any = menu.find((m: any) => m.id === id);
+    const i: any = order?.items.find((x: any) => x.product_id === id);
+    return p ?? (i ? { id, name: i.name, sale_price: i.sale_price } : null);
+  }).filter(Boolean) as any[];
+  const subtotal = useMemo(() => chosen.reduce((s: number, p: any) => s + Math.round(cur.lines[p.id] * p.sale_price), 0), [chosen, cur.lines]);
+  const total = Math.max(0, subtotal - toCents(discount));
+  const count = chosen.reduce((s: number, p: any) => s + cur.lines[p.id], 0);
+  const payments: PayLine[] = split ?? (method === 'credit' ? [] : [{ method, amount: total ? fromCents(total) : '' }]);
+  const paid = payments.reduce((s, p) => s + toCents(p.amount), 0);
+  const unpaid = total - paid;
+  const cashIn = toCents(payments.find((p) => p.method === 'cash')?.amount ?? 0);
+  const origLines: Lines = order ? Object.fromEntries(order.items.map((i: any) => [i.product_id, i.qty])) : {};
+  const changed = Boolean(order && edit && !sameLines(edit.lines, origLines));
+  const tableName = (id: string) => (tables.data ?? []).find((t: any) => t.id === id)?.name;
 
-  const ticket = (d: Draft, number?: number) => ({
-    number, items: itemsOf(d).map((p: any) => ({ name: p.name, qty: d.lines[p.id] })), table: tables.data?.find((t: any) => t.id === d.table)?.name, label: d.label, note: d.note,
-  });
-  const sendDraft = async (d: Draft) => {
-    const items = itemsOf(d).map((p: any) => ({ product: p.id, qty: d.lines[p.id] }));
-    if (editId) {
-      await patch(`/restaurant/orders/${editId}`, { items, table: d.table || null, label: d.label, note: d.note });
-      return ticket(d, editing.data?.number);
-    }
-    const r = await post('/restaurant/orders', { items, table: d.table || undefined, label: d.label, note: d.note }, d.key);
-    drop(d.key);
-    return ticket(d, r.number);
+  const add = (id: string, d: number) => setCur((c) => ({ ...c, lines: { ...c.lines, [id]: Math.max(0, Math.round(((c.lines[id] ?? 0) + d) * 1000) / 1000) } }));
+  const pick = (o: any | null) => {
+    setOpenId(o?.id ?? null);
+    setEdit(o ? { lines: Object.fromEntries(o.items.map((i: any) => [i.product_id, i.qty])), table: o.table_id ?? '', label: o.label ?? '', note: o.note ?? '' } : null);
+    resetPay(); setDone(null);
   };
-  /** Send this client's order, or all clients' orders (each its own numbered order). */
-  const send = async (all = false) => {
-    const list = all ? ready : [cur];
-    const done: any[] = [];
-    const r = await run(async () => { for (const d of list) done.push(await sendDraft(d)); return done; },
-      editId ? 'Order updated' : list.length > 1 ? `${list.length} orders sent to the kitchen` : 'Order sent to the kitchen');
-    if (done.length) { setSent(done); setActive(0); tables.reload(); }
-    if (r && editId) navigate(path('/order-list'));
+  // An open order that was paid or cancelled elsewhere: back to a new order.
+  useEffect(() => { if (openId && orders.data && !order) { setOpenId(null); setEdit(null); } }, [openId, orders.data, order]);
+
+  const items = () => chosen.map((p: any) => ({ product: p.id, qty: cur.lines[p.id] }));
+  const ticketOf = (number: number | undefined, d: Draft) => ({ number, table: tableName(d.table), label: d.label, note: d.note, items: chosen.map((p: any) => ({ name: p.name, qty: d.lines[p.id] })) });
+  const finished = () => { resetPay(); orders.reload(); tables.reload(); customers.reload(); setSaved((n) => n + 1); };
+  const pay = { date: today, customer: customer || undefined, discount: toCents(discount), payments: payments.map((p) => ({ method: p.method, amount: toCents(p.amount) })) };
+
+  const payNow = async () => {
+    const r: any = await run((key) => (order
+      ? post(`/restaurant/orders/${order.id}/pay`, { ...pay, items: changed ? items() : undefined }, key)
+      : post('/restaurant/orders', { items: items(), table: cur.table || undefined, label: cur.label, note: cur.note, pay }, key)));
+    if (!r) return;
+    const saleId = order ? r.id : r.sale;
+    const label = order ? `Order #${order.number}` : `Order #${r.number}`;
+    const ticket = ticketOf(order?.number ?? r.number, cur);
+    if (order) { setOpenId(null); setEdit(null); } else setDraft(emptyDraft());
+    finished();
+    const sale = await get(`/sales/${saleId}`).catch(() => null);
+    setDone({ text: `${label} paid · ${money(sale?.total ?? total)}`, sale, ticket });
   };
+  const send = async () => {
+    const r: any = await run((key) => (order
+      ? patch(`/restaurant/orders/${order.id}`, { items: items(), table: cur.table || null, label: cur.label, note: cur.note })
+      : post('/restaurant/orders', { items: items(), table: cur.table || undefined, label: cur.label, note: cur.note }, key)));
+    if (!r) return;
+    const number = order?.number ?? r.number;
+    setDone({ text: `Order #${number} ${order ? 'updated' : 'sent to the kitchen'} — pay later from the top`, ticket: ticketOf(number, cur) });
+    if (order) { setOpenId(null); setEdit(null); } else setDraft(emptyDraft());
+    finished();
+  };
+  const clear = () => { setDraft(emptyDraft()); resetPay(); };
+
+  const open = orders.data ?? [];
+  const openTotal = open.reduce((s: number, o: any) => s + o.total, 0);
+  const freeTables = (tables.data ?? []).filter((t: any) => t.active && (!t.order_id || t.order_id === openId));
+  const blocked = busy || !chosen.length || unpaid < 0 || (unpaid > 0 && !customer);
 
   return (
     <div className="module-page">
-      <ErrorBox error={products.error} />
+      <ErrorBox error={products.error ?? orders.error} />
+
+      {/* Open orders: tap one to add items or take its payment */}
+      <div className="panel rpos-orders">
+        <div className="rpos-orders__head"><strong>Open orders</strong><span className="muted small">{open.length ? `${open.length} not paid · ${money(openTotal)}` : 'none — orders sent to the kitchen wait here until paid'}</span></div>
+        <div className="rpos-chips">
+          <button type="button" className={`rpos-chip rpos-chip--new ${!order ? 'active' : ''}`} onClick={() => pick(null)}>
+            <Plus size={14} /> New order{draft && Object.values(draft.lines).some((q) => q > 0) ? <span className="rpos-chip__badge">{num(Object.values(draft.lines).reduce((a, b) => a + b, 0))}</span> : null}
+          </button>
+          {open.map((o: any) => (
+            <button key={o.id} type="button" className={`rpos-chip ${openId === o.id ? 'active' : ''}`} onClick={() => pick(o)}>
+              <strong>#{o.number}</strong>
+              <span className="rpos-chip__who">{o.table_name ?? o.label ?? o.items.map((i: any) => `${num(i.qty)} ${i.name}`).join(', ')}</span>
+              <span className="rpos-chip__amt">{money(o.total)}</span>
+              <span className="rpos-chip__age">{since(o.created_at)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="pos">
+        {/* Menu */}
         <div className="panel">
-          <div className="row" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ marginBottom: 10 }}>
             <input className="form-input" style={{ flex: 1 }} placeholder="Search the menu" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           {categories.length > 1 && (
-            <div className="scope-tabs" style={{ marginBottom: 12 }}>
+            <div className="scope-tabs" style={{ marginBottom: 10 }}>
               <button type="button" className={!category ? 'active' : ''} onClick={() => setCategory('')}>All</button>
               {categories.map((c) => <button key={c} type="button" className={category === c ? 'active' : ''} onClick={() => setCategory(c)}>{c}</button>)}
             </div>
           )}
-          <div className="menu-grid">
+          <div className="menu-grid menu-grid--compact">
             {shown.map((p: any) => (
-              <div key={p.id} className={`menu-tile ${lines[p.id] ? 'menu-tile--on' : ''}`}>
+              <div key={p.id} className={`menu-tile ${cur.lines[p.id] ? 'menu-tile--on' : ''}`}>
                 <button type="button" className="menu-tile__main" onClick={() => add(p.id, 1)}>
-                  <ItemPicture item={p} size={72} />
+                  <ItemPicture item={p} size={52} />
                   <strong>{p.name}</strong>
                   <span className="price">{money(p.sale_price)}</span>
                 </button>
-                {lines[p.id] > 0 && (
-                  <div className="menu-tile__qty">
-                    <button type="button" onClick={() => add(p.id, -1)} aria-label={`One less ${p.name}`}><Minus size={16} /></button>
-                    <span>{num(lines[p.id])}</span>
-                    <button type="button" onClick={() => add(p.id, 1)} aria-label={`One more ${p.name}`}><Plus size={16} /></button>
-                  </div>
-                )}
+                {cur.lines[p.id] > 0 && <span className="menu-tile__count">{num(cur.lines[p.id])}</span>}
               </div>
             ))}
           </div>
-          {!products.loading && !menu.length && <div className="mc-note">No dishes or drinks yet. Add them (with a picture) in Menu.</div>}
+          {!products.loading && !menu.length && <div className="mc-note">No dishes or drinks yet. Add them in Menu.</div>}
         </div>
 
-        <div className="panel pos-cart">
-          {!editId && (
-            <div className="draft-tabs">
-              {drafts.map((d, i) => (
-                <button key={d.key} type="button" className={i === at ? 'active' : ''} onClick={() => setActive(i)}>
-                  {draftName(d, i)}{itemsOf(d).length > 0 && <span className="draft-count">{num(itemsOf(d).reduce((t: number, p: any) => t + d.lines[p.id], 0))}</span>}
-                </button>
-              ))}
-              <button type="button" className="draft-add" onClick={addClient}><Plus size={14} /> Client</button>
+        {/* The order and its payment */}
+        <div className="panel pos-cart rpos-cart">
+          {done && (
+            <div className="rpos-done">
+              <CheckCircle2 size={18} />
+              <span>{done.text}</span>
+              {done.sale && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPrinting({ sale: done.sale })}><Printer size={13} /> Receipt</button>}
+              {done.ticket && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPrinting({ ticket: done.ticket })}><Printer size={13} /> Kitchen</button>}
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setDone(null)} aria-label="Hide"><X size={13} /></button>
             </div>
           )}
-          <h2 style={{ margin: 0, fontSize: 17 }}>{editId ? `Order ${editing.data ? `#${editing.data.number}` : ''} — add or change items` : `Order for ${draftName(cur, at)}`}</h2>
-          {chosen.length === 0 ? <p className="muted">Tap the pictures to add items.</p> : (
+          <div className="row row--between">
+            <h2 style={{ margin: 0, fontSize: 17 }}>{order ? `Order #${order.number}` : 'New order'}</h2>
+            {order
+              ? <span className="small muted">{since(order.created_at)} · by {order.created_by_name}</span>
+              : chosen.length > 0 && <button type="button" className="btn btn-ghost btn-xs" onClick={clear}><Trash2 size={13} /> Clear</button>}
+          </div>
+
+          {chosen.length === 0 ? <p className="muted" style={{ margin: 0 }}>Tap the menu to add items. Then <strong>Pay</strong> now, or <strong>Send to kitchen</strong> and pay later from the open orders above.</p> : (
             <div>
               {chosen.map((p: any) => (
                 <div className="cart-line" key={p.id}>
-                  <div className="row" style={{ flexWrap: 'nowrap', gap: 8 }}><ItemPicture item={p} size={34} /><div><strong>{num(lines[p.id])} × {p.name}</strong><div className="muted small">{money(p.sale_price)} each</div></div></div>
+                  <div><strong>{p.name}</strong><div className="muted small">{money(p.sale_price)} each</div></div>
                   <div className="qty-box">
-                    <button type="button" onClick={() => add(p.id, -1)}>−</button>
-                    <button type="button" onClick={() => add(p.id, 1)}>+</button>
+                    <button type="button" onClick={() => add(p.id, -1)} aria-label={`One less ${p.name}`}><Minus size={14} /></button>
+                    <span className="qty-box__n">{num(cur.lines[p.id])}</span>
+                    <button type="button" onClick={() => add(p.id, 1)} aria-label={`One more ${p.name}`}><Plus size={14} /></button>
                   </div>
-                  <div className="num">{money(Math.round(lines[p.id] * p.sale_price))}</div>
+                  <div className="num">{money(Math.round(cur.lines[p.id] * p.sale_price))}</div>
                 </div>
               ))}
             </div>
           )}
-          <div className="form-row">
-            <Field label="Table (optional)">
-              <select className="form-select" value={table} onChange={(e) => setTable(e.target.value)}>
-                <option value="">No table</option>
-                {(tables.data ?? []).filter((t: any) => t.active && (!t.order_id || t.order_id === editId)).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Client name (optional)"><input className="form-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Ali, takeaway" /></Field>
-          </div>
-          <Field label="Note for the kitchen (optional)"><input className="form-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. no sugar in 2 teas" /></Field>
-          <div className="cart-total"><span>{count ? `${num(count)} items` : 'Total'}</span><span>{money(total)}</span></div>
-          <button type="button" className="btn btn-primary btn-block" disabled={busy || !chosen.length} onClick={() => send()}>
-            <Send size={18} /> {busy ? 'Sending…' : editId ? 'Update order' : `Send ${draftName(cur, at)}'s order`}
-          </button>
-          {!editId && ready.length > 1 && (
-            <button type="button" className="btn btn-secondary btn-block" disabled={busy} onClick={() => send(true)}><Send size={16} /> Send all ({ready.length} orders)</button>
+
+          <details className="rpos-more" open={Boolean(cur.table || cur.label || cur.note) || undefined}>
+            <summary>Table, name, note for the kitchen{cur.table || cur.label ? ` — ${[tableName(cur.table), cur.label].filter(Boolean).join(' · ')}` : ''}</summary>
+            <div className="form-row">
+              <Field label="Table">
+                <select className="form-select" value={cur.table} onChange={(e) => setCur((c) => ({ ...c, table: e.target.value }))}>
+                  <option value="">No table</option>
+                  {freeTables.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Name"><input className="form-input" value={cur.label} onChange={(e) => setCur((c) => ({ ...c, label: e.target.value }))} placeholder="e.g. Ali, takeaway" /></Field>
+            </div>
+            <Field label="Note"><input className="form-input" value={cur.note} onChange={(e) => setCur((c) => ({ ...c, note: e.target.value }))} placeholder="e.g. no sugar in 2 teas" /></Field>
+          </details>
+
+          {chosen.length > 0 && (
+            <div className="rpos-pay">
+              <div className="cart-total"><span>{num(count)} items{toCents(discount) > 0 ? ` · −${money(toCents(discount))}` : ''}</span><span>{money(total)}</span></div>
+              {!split && (
+                <div className="method-picker">
+                  {activeMethods.map((m) => <button key={m.id} type="button" className={`btn ${method === m.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMethod(m.id)}>{m.name}</button>)}
+                  <button type="button" className={`btn ${method === 'credit' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMethod('credit')}>On credit</button>
+                </div>
+              )}
+              {split && <PaymentsEditor value={split} total={total} onChange={setSplit} />}
+              {cashIn > 0 && !split && (
+                <div className="rpos-change">
+                  <Field label="Cash given"><MoneyInput value={given} onChange={setGiven} /></Field>
+                  <div><span className="muted small">Change</span><strong>{money(Math.max(0, toCents(given) - cashIn))}</strong></div>
+                </div>
+              )}
+              {unpaid > 0 && (
+                <Field label={method === 'credit' && !split ? 'Customer who owes it' : `Customer who owes ${money(unpaid)}`}>
+                  <PartySelect kind="customers" value={customer} onChange={setCustomer} items={customers.data ?? []} onCreated={customers.reload} placeholder="Choose the customer…" />
+                </Field>
+              )}
+              {unpaid < 0 && <div className="mc-error">Payments are more than the total. Enter only the amount kept.</div>}
+              {showDiscount && <Field label="Discount"><MoneyInput value={discount} onChange={setDiscount} /></Field>}
+              <div className="rpos-links">
+                {!showDiscount && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setShowDiscount(true)}>+ Discount</button>}
+                {split
+                  ? <button type="button" className="btn btn-ghost btn-xs" onClick={() => setSplit(null)}>One payment method</button>
+                  : <button type="button" className="btn btn-ghost btn-xs" onClick={() => setSplit([{ method: method === 'credit' ? 'cash' : method, amount: fromCents(total) }])}>Split payment</button>}
+              </div>
+            </div>
           )}
-          {(chosen.length > 0 || drafts.length > 1) && !editId && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={clear}><Trash2 size={14} /> {drafts.length > 1 ? `Remove ${draftName(cur, at)}` : 'Clear'}</button>
+
+          {chosen.length > 0 && <button type="button" className="btn btn-primary btn-block rpos-paybtn" disabled={blocked} onClick={payNow}>
+            {busy ? 'Saving…' : unpaid > 0 && paid === 0 ? `Save ${money(total)} on credit` : `Pay ${money(paid)}${unpaid > 0 ? ` · ${money(unpaid)} on credit` : ''}`}
+          </button>}
+          {chosen.length > 0 && (!order || changed) && (
+            <button type="button" className="btn btn-secondary btn-block" disabled={busy || !chosen.length} onClick={send}>
+              <Send size={16} /> {order ? 'Save changes — pay later' : 'Send to kitchen — pay later'}
+            </button>
           )}
-          <p className="small muted" style={{ margin: 0 }}>The order goes to the kitchen as <strong>Pending</strong>. Payment is taken later in Orders.</p>
+          {order && (
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPrinting({ ticket: ticketOf(order.number, cur) })}><Printer size={12} /> Kitchen ticket</button>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCancelling(order)}>Cancel order</button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Phones/tablets: the order total and Send button stay in reach while scrolling the menu. */}
+      {/* Today's sales underneath */}
+      <SalesPage embedded refreshKey={saved} />
+
+      {/* Phones: the total and Pay stay in reach while scrolling the menu. */}
       {chosen.length > 0 && (
         <div className="order-bar no-print">
-          <button type="button" className="order-bar__summary" onClick={() => document.querySelector('.pos-cart')?.scrollIntoView({ behavior: 'smooth' })}>
-            <strong>{num(count)} items · {money(total)}</strong><span>View order</span>
+          <button type="button" className="order-bar__summary" onClick={() => document.querySelector('.rpos-cart')?.scrollIntoView({ behavior: 'smooth' })}>
+            <strong>{num(count)} items · {money(total)}</strong><span>{order ? `Order #${order.number}` : 'Payment & send'}</span>
           </button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => send()}><Send size={16} /> {editId ? 'Update' : 'Send order'}</button>
+          <button type="button" className="btn btn-primary" onClick={() => document.querySelector('.rpos-pay')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>Pay / send</button>
         </div>
       )}
 
-      <Modal open={Boolean(sent)} onClose={() => setSent(null)} title={sent && sent.length > 1 ? `${sent.length} orders sent: ${sent.map((t) => `#${t.number}`).join(', ')}` : sent?.[0]?.number ? `Order #${sent[0].number} sent` : 'Order sent'} width="sm"
-        footer={<>
-          <button type="button" className="btn btn-secondary" onClick={() => navigate(path('/order-list'))}><ClipboardList size={16} /> See orders</button>
-          <button type="button" className="btn btn-secondary" onClick={() => window.print()}><Printer size={16} /> Print ticket</button>
-          <button type="button" className="btn btn-primary" onClick={() => setSent(null)}>{drafts.some((d) => itemsOf(d).length) ? 'Back to orders being taken' : 'New order'}</button>
-        </>}>
-        {sent?.map((t, i) => <KitchenTicket key={i} order={t} />)}
+      {cancelling && <ReasonModal open onClose={() => setCancelling(null)} title={`Cancel order ${orderTitle(cancelling)}?`} action={`/restaurant/orders/${cancelling.id}/cancel`}
+        confirmLabel="Cancel order" message="Nothing was paid yet, so money does not change. The cancellation is recorded." onDone={() => { pick(null); orders.reload(); tables.reload(); }} />}
+      <Modal open={Boolean(printing)} onClose={() => setPrinting(null)} title={printing?.sale ? 'Receipt' : 'Kitchen ticket'} width="sm"
+        footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
+        {printing?.sale && <SaleReceipt sale={printing.sale} />}
+        {printing?.ticket && <KitchenTicket order={printing.ticket} />}
       </Modal>
     </div>
   );
@@ -238,120 +329,5 @@ function KitchenTicket({ order }: { order: any }) {
       <hr />
       <p className="center small">{new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
     </div>
-  );
-}
-
-// ── Orders (to serve and to pay) ────────────────────────────────
-export function OrdersPage() {
-  const { path } = useAuth();
-  const navigate = useNavigate();
-  const orders = useLoad(() => get('/restaurant/orders'), []);
-  usePolling(orders.reload, 10000);
-  const [paying, setPaying] = useState<any>(null);
-  const [cancelling, setCancelling] = useState<any>(null);
-  const [ticket, setTicket] = useState<any>(null);
-  const [receipt, setReceipt] = useState<any>(null);
-  const filter = useFilters<any>(orders.data ?? [], [
-    { key: 'by', label: 'Taken by', get: (o) => o.created_by_name },
-    { key: 'table', label: 'Table', get: (o) => o.table_name ?? 'No table' },
-  ], (o) => `${o.number ?? ''} #${o.number ?? ''} ${o.label ?? ''} ${o.table_name ?? ''} ${o.note ?? ''} ${o.items.map((i: any) => i.name).join(' ')} ${o.created_by_name}`, 'Search order #, name, item');
-  const list = filter.shown;
-  const unpaid = (orders.data ?? []).reduce((s: number, o: any) => s + o.total, 0);
-
-  return (
-    <div className="module-page">
-      <PageHeader icon={<ClipboardList size={22} />} title="Orders" subtitle={`${orders.data?.length ?? 0} open orders · ${money(unpaid)} not paid yet`}
-        actions={<button type="button" className="btn btn-primary" onClick={() => navigate(path('/orders'))}><Plus size={16} /> New order</button>} />
-      <ErrorBox error={orders.error} />
-      {(orders.data?.length ?? 0) > 1 && filter.bar}
-      {!orders.loading && !list.length && <div className="mc-note">{filter.active ? 'No order matches.' : 'No pending orders. New orders appear here automatically.'}</div>}
-      <div className="orders-grid">
-        {list.map((o: any) => (
-          <div key={o.id} className="order-card">
-            <div className="row row--between">
-              <strong className="order-card__title">{orderTitle(o)}</strong>
-              <StatusBadge label="Pending" tone="yellow" />
-            </div>
-            <div className="small muted">{since(o.created_at)} · by {o.created_by_name}</div>
-            <ul className="order-card__items">
-              {o.items.map((i: any) => <li key={i.id}><span>{num(i.qty)} × {i.name}</span><span>{money(Math.round(i.qty * i.sale_price))}</span></li>)}
-            </ul>
-            {o.note && <div className="small"><strong>Note:</strong> {o.note}</div>}
-            <div className="cart-total" style={{ fontSize: 18 }}><span>Total</span><span>{money(o.total)}</span></div>
-            <button type="button" className="btn btn-primary btn-block" onClick={() => setPaying(o)}>Pay {money(o.total)}</button>
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => navigate(`${path('/orders')}?order=${o.id}`)}>Add items</button>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setTicket({ ...o, table: o.table_name })}><Printer size={12} /> Ticket</button>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCancelling(o)}>Cancel</button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {paying && <PayModal order={paying} onClose={() => setPaying(null)} onPaid={async (saleId) => { setPaying(null); orders.reload(); setReceipt(await get(`/sales/${saleId}`)); }} />}
-      {cancelling && <ReasonModal open onClose={() => setCancelling(null)} title={`Cancel order ${orderTitle(cancelling)}?`} action={`/restaurant/orders/${cancelling.id}/cancel`}
-        confirmLabel="Cancel order" message="Nothing was paid yet, so money and stock do not change. The cancellation is recorded." onDone={orders.reload} />}
-      <Modal open={Boolean(ticket)} onClose={() => setTicket(null)} title="Kitchen ticket" width="sm"
-        footer={<button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print</button>}>
-        {ticket && <KitchenTicket order={ticket} />}
-      </Modal>
-      <Modal open={Boolean(receipt)} onClose={() => setReceipt(null)} title="Paid" width="sm"
-        footer={<>
-          <button type="button" className="btn btn-secondary" onClick={() => setReceipt(null)}>Done</button>
-          <button type="button" className="btn btn-primary" onClick={() => window.print()}><Printer size={16} /> Print receipt</button>
-        </>}>
-        {receipt && <SaleReceipt sale={receipt} />}
-      </Modal>
-    </div>
-  );
-}
-
-function PayModal({ order, onClose, onPaid }: { order: any; onClose: () => void; onPaid: (saleId: string) => void }) {
-  const { today } = useAuth();
-  const customers = useLoad(() => get('/customers', { business: 'restaurant' }), []);
-  const [discount, setDiscount] = useState('');
-  const [customer, setCustomer] = useState('');
-  const [payLines, setPayLines] = useState<PayLine[]>([{ method: 'cash', amount: '' }]);
-  const [touched, setTouched] = useState(false);
-  const [given, setGiven] = useState('');
-  const { run, busy } = useSubmit();
-  const total = Math.max(0, order.total - toCents(discount));
-  // Same rule as the till: one method covers the whole bill until the cashier types a different amount.
-  const payments: PayLine[] = touched ? payLines : [{ method: payLines[0]?.method ?? 'cash', amount: total ? fromCents(total) : '' }];
-  const paid = payments.reduce((s, p) => s + toCents(p.amount), 0);
-  const credit = total - paid;
-  const cash = toCents(payments.find((p) => p.method === 'cash')?.amount ?? 0);
-  const pay = async () => {
-    const r = await run((key) => post(`/restaurant/orders/${order.id}/pay`, {
-      date: today, customer: customer || undefined, discount: toCents(discount),
-      payments: payments.map((p) => ({ method: p.method, amount: toCents(p.amount) })),
-    }, key), 'Paid');
-    if (r) onPaid(r.id);
-  };
-  return (
-    <Modal open onClose={onClose} title={`Pay order ${orderTitle(order)}`} width="sm"
-      footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Back</button>
-        <button type="button" className="btn btn-primary" disabled={busy || credit < 0 || (credit > 0 && !customer)} onClick={pay}>{busy ? 'Saving…' : `Paid ${money(paid)}`}</button></>}>
-      <div className="form-stack">
-        <ul className="order-card__items">
-          {order.items.map((i: any) => <li key={i.id}><span>{num(i.qty)} × {i.name}</span><span>{money(Math.round(i.qty * i.sale_price))}</span></li>)}
-        </ul>
-        <Field label="Discount (optional)"><MoneyInput value={discount} onChange={setDiscount} /></Field>
-        <div className="cart-total"><span>To pay</span><span>{money(total)}</span></div>
-        <Field label="Paid with"><PaymentsEditor value={payments} total={total} onChange={(v) => { setTouched(!(v.length === 1 && toCents(v[0].amount) === total)); setPayLines(v); }} /></Field>
-        {cash > 0 && (
-          <div className="form-row">
-            <Field label="Cash given"><MoneyInput value={given} onChange={setGiven} /></Field>
-            <Field label="Change"><div className="cart-total" style={{ fontSize: 18 }}>{money(Math.max(0, toCents(given) - cash))}</div></Field>
-          </div>
-        )}
-        {credit > 0 && (
-          <>
-            <Field label="Customer who owes the rest"><PartySelect kind="customers" value={customer} onChange={setCustomer} items={customers.data ?? []} onCreated={customers.reload} placeholder="Choose…" /></Field>
-            <div className={customer ? 'mc-warn' : 'mc-error'}>{money(credit)} unpaid {customer ? 'will be added to the customer’s debt.' : '— choose the customer who will owe it.'}</div>
-          </>
-        )}
-      </div>
-    </Modal>
   );
 }

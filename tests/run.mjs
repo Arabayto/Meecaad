@@ -345,7 +345,7 @@ try {
     assert.equal((await tr.call('GET', '/users')).status, 403);
   });
 
-  await step('restaurant: send order (pending), add items, pay later; tables optional; cancel; pictures', async () => {
+  await step('restaurant: one-page till — pay now, or send and pay later (items can change); tables optional; cancel; pictures', async () => {
     const t1 = (await owner.post('/restaurant/tables', { name: 'Table 1' })).id;
     // Take an order, then add to it, then pay later.
     const order = (await owner.post('/restaurant/orders', { table: t1, items: [{ product: tea, qty: 3 }] })).id;
@@ -381,6 +381,30 @@ try {
     const qs = await owner.post(`/restaurant/orders/${quick.id}/pay`, { payments: [{ method: 'zaad', amount: 200 }] });
     assert.equal((await owner.get(`/sales/${qs.id}`)).payments[0].method_id, 'zaad');
     await owner.post(`/restaurant/orders/${next.id}/cancel`, { reason: 'test' });
+    // One-page till: Pay now = the order and its sale in one save (a table is not held); retry-safe.
+    const before = (await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.revenue;
+    const nowKey = crypto.randomUUID();
+    const now = await owner.post('/restaurant/orders', { table: t1, items: [{ product: tea, qty: 2 }], pay: { discount: 10, payments: [{ method: 'cash', amount: 90 }] } }, nowKey);
+    assert.ok(now.sale && now.number >= 1, 'pay now returns the order number and the sale');
+    assert.equal((await owner.post('/restaurant/orders', { table: t1, items: [{ product: tea, qty: 2 }], pay: { discount: 10, payments: [{ method: 'cash', amount: 90 }] } }, nowKey)).sale, now.sale, 'double click: one sale');
+    const nowSale = await owner.get(`/sales/${now.sale}`);
+    assert.deepEqual([nowSale.subtotal, nowSale.discount, nowSale.total, nowSale.paid_amount], [100, 10, 90, 90]);
+    assert.ok(nowSale.note.includes('Table 1'), 'table shown on the sale');
+    assert.equal((await owner.get('/restaurant/orders')).length, 0, 'a paid-now order is not left open');
+    assert.ok(!(await owner.get('/restaurant/tables')).find((t) => t.id === t1).order_id, 'paying now does not hold the table');
+    assert.equal((await owner.get('/dashboard?business=restaurant')).figures.today.restaurant.revenue, before + 90);
+    // Unpaid without a customer is refused and saves nothing (no order either).
+    assert.equal((await owner.call('POST', '/restaurant/orders', { items: [{ product: tea, qty: 1 }], pay: { payments: [] } })).status, 400);
+    assert.equal((await owner.get('/restaurant/orders')).length, 0, 'nothing saved when the payment is refused');
+    const restRegular = (await owner.get('/customers?business=restaurant'))[0].id;
+    const onCredit = await owner.post('/restaurant/orders', { items: [{ product: tea, qty: 3 }], pay: { customer: restRegular, payments: [] } });
+    assert.equal((await owner.get(`/sales/${onCredit.sale}`)).credit_amount, 150, 'pay now on credit goes to the customer');
+    // An open order whose items change at the till is paid with the new items in the same step.
+    const later = await owner.post('/restaurant/orders', { items: [{ product: tea, qty: 1 }] });
+    const laterSale = await owner.post(`/restaurant/orders/${later.id}/pay`, { items: [{ product: tea, qty: 3 }], payments: [{ method: 'cash', amount: 150 }] });
+    assert.equal((await owner.get(`/sales/${laterSale.id}`)).total, 150, 'changed items are paid');
+    assert.equal((await owner.get('/restaurant/orders')).length, 0);
+    assert.equal((await owner.call('POST', `/restaurant/orders/${later.id}/pay`, { items: [{ product: tea, qty: 1 }], payments: [] })).status, 409, 'paid order cannot change');
     // Pictures: small image saved and served to the restaurant only.
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     await owner.post(`/products/${tea}/image`, { data: png });
