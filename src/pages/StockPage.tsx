@@ -103,15 +103,14 @@ export function StockPage({ view }: { view: CatalogView }) {
                     </tbody>
                   </>
                 ) : (<>
-                <thead><tr><th>Item</th><th>Type</th><th className="num">Selling price</th><th className="num">In stock</th><th className="num">Avg cost</th><th className="num">Stock value</th><th className="num">Sold 30 days</th><th></th></tr></thead>
+                <thead><tr><th>Item</th>{view !== 'products' && <th>Type</th>}<th className="num">Selling price</th><th className="num">In stock</th><th className="num">Avg cost</th><th className="num">Stock value</th><th className="num">Sold 30 days</th><th></th></tr></thead>
                 <tbody>
                   {rows.map((p: any) => {
                     const isLow = p.track_stock && p.kind !== 'fuel' && (p.stock_qty <= 0 || p.stock_qty <= p.reorder_level);
                     return (
                       <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                        <td><div className="row" style={{ flexWrap: 'nowrap', gap: 10 }}>{view === 'products' && <ItemPicture item={p} size={36} />}
-                          <div><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</div></div></td>
-                        <td className="small">{KIND_LABEL[p.kind]}{!p.active && ' (hidden)'}</td>
+                        <td><strong>{p.name}</strong>{!p.active && <span className="small muted"> (hidden)</span>}{p.category && <div className="small muted">{p.category}</div>}</td>
+                        {view !== 'products' && <td className="small">{KIND_LABEL[p.kind]}</td>}
                         <td className="num">{p.kind === 'ingredient' ? '—' : money(p.sale_price)}{p.kind === 'fuel' && ' /L'}</td>
                         <td className="num">{p.track_stock ? <>{num(p.stock_qty)} {p.unit} {isLow && <StatusBadge label={p.stock_qty <= 0 ? 'Out' : 'Low'} tone={p.stock_qty <= 0 ? 'red' : 'yellow'} />}</>
                           : <span className="muted">not tracked</span>}</td>
@@ -194,12 +193,35 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
   };
   // undefined = unchanged, null = remove, string = new picture (data URL)
   const [picture, setPicture] = useState<string | null | undefined>(undefined);
-  const showPictures = v.kind === 'menu' || v.kind === 'item';
+  const showPictures = v.kind === 'menu';
+  // Store products are kept short: name, cost, selling price, quantity (unit, code, category and the
+  // low-stock level keep their defaults / existing values).
+  const simple = view === 'products';
 
   return (
     <Modal open onClose={onClose} title={isNew ? v.add : `Edit ${product.name}`} width="md"
       footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
         <button type="button" className="btn btn-primary" disabled={busy || !f.name.trim()} onClick={save}>Save</button></>}>
+      {simple ? (
+      <div className="form-stack">
+        <Field label="Product name"><input className="form-input" value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus placeholder="e.g. Rice 25kg" /></Field>
+        {isNew ? (
+          <div className="form-row">
+            <Field label="Cost price (what you paid, each)"><MoneyInput value={f.openingCost} onChange={(v) => set('openingCost', v)} /></Field>
+            <Field label="Selling price (each)"><MoneyInput value={f.salePrice} onChange={(v) => set('salePrice', v)} /></Field>
+          </div>
+        ) : (
+          <Field label="Selling price (each)"><MoneyInput value={f.salePrice} onChange={(v) => set('salePrice', v)} /></Field>
+        )}
+        {isNew && <Field label="Quantity in stock now"><input className="form-input" inputMode="decimal" value={f.openingQty} onChange={(e) => set('openingQty', e.target.value)} placeholder="0" /></Field>}
+        {isNew && toCents(f.salePrice) > 0 && toCents(f.openingCost) > 0 && (
+          <div className={toCents(f.salePrice) < toCents(f.openingCost) ? 'mc-warn' : 'mc-note'}>Profit per item {money(toCents(f.salePrice) - toCents(f.openingCost))}{toCents(f.salePrice) < toCents(f.openingCost) ? ' — selling below cost' : ''}</div>
+        )}
+        {!isNew && <p className="small muted" style={{ margin: 0 }}>Cost {money(Math.round(product.avg_cost ?? 0))} each (average of what was paid) · {num(product.stock_qty ?? 0)} in stock. Stock changes through Purchases, sales and Waste / count.</p>}
+        {priceChanged && <Field label="Why is the price changing? (optional)"><input className="form-input" value={f.priceReason} onChange={(e) => set('priceReason', e.target.value)} /></Field>}
+        {!isNew && <label className="row"><input type="checkbox" checked={Boolean(f.active)} onChange={(e) => set('active', e.target.checked ? 1 : 0)} /> Active (uncheck to hide from selling)</label>}
+      </div>
+      ) : (
       <div className="form-stack">
         <div className={v.categoryHint ? 'form-row' : ''}>
           <Field label={view === 'fuels' ? 'Fuel name (e.g. Diesel, Petrol)' : 'Name'}><input className="form-input" value={f.name} onChange={(e) => set('name', e.target.value)} autoFocus /></Field>
@@ -251,6 +273,7 @@ function ProductModal({ product, view, categories, onClose, onDone }: { product:
           </div>
         )}
       </div>
+      )}
     </Modal>
   );
 }

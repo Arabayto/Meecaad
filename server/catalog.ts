@@ -33,7 +33,8 @@ export async function createProduct(ctx: Ctx) {
   const id = newId();
   const track = kind === 'menu' ? 0 : 1;   // restaurant menu items are not stock-counted
   const openingQty = kind === 'fuel' || !track ? 0 : qty(b.openingQty ?? 0, 'Opening quantity', { min: 0 });
-  const openingCost = openingQty ? Number(cents(b.openingCost, 'Opening unit cost')) : 0;
+  // The cost price is kept even with nothing in stock yet (purchases then average from it).
+  const openingCost = kind === 'fuel' || !track ? 0 : Number(cents(b.openingCost ?? 0, 'Cost price'));
   const name = str(b.name, 'Name', { required: true, max: 120 });
   const date = entryDate(b.date);
   const tx = new Tx(ctx.db, ctx.user);

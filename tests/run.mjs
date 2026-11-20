@@ -96,6 +96,17 @@ try {
     assert.equal((await owner.call('POST', '/products', { business: 'store', name: 'Bad', kind: 'fuel' })).status, 400);
   });
 
+  await step('store: add product with only name, cost, selling price and quantity', async () => {
+    const quick = await owner.post('/products', { business: 'store', name: 'Biscuits', kind: 'item', salePrice: 120, openingCost: 80, openingQty: 24 });
+    const row = (await owner.get('/products?business=store')).find((p) => p.id === quick.id);
+    assert.deepEqual([row.unit, row.track_stock, row.stock_qty, row.avg_cost, row.stock_value, row.sale_price], ['pcs', 1, 24, 80, 1920, 120]);
+    const none = await owner.post('/products', { business: 'store', name: 'Batteries', kind: 'item', salePrice: 100, openingCost: 60 });
+    const nrow = (await owner.get('/products?business=store')).find((p) => p.id === none.id);
+    assert.deepEqual([nrow.stock_qty, nrow.avg_cost, nrow.stock_value], [0, 60, 0], 'cost kept with nothing in stock; no value');
+    await owner.ok('PATCH', `/products/${quick.id}`, { active: false });
+    await owner.ok('PATCH', `/products/${none.id}`, { active: false });
+  });
+
   await step('store: normal cash sale (with idempotent retry)', async () => {
     const key = crypto.randomUUID();
     const body = { business: 'store', items: [{ product: rice, qty: 2 }], payments: [{ method: 'cash', amount: 5000 }] };
