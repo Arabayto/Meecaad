@@ -14,6 +14,7 @@ export async function listProducts(ctx: Ctx) {
   // "Sold in 30 days" is only worked out when a screen asks for it (Stock page),
   // reading just the last 30 days of sales — not on every till load.
   const stats = ctx.url.searchParams.get('stats') === '1';
+  const deleted = ctx.url.searchParams.get('deleted') === '1';   // the "Deleted" list, to restore from
   return all<any>(ctx.db,
     `${stats ? `WITH sold AS (SELECT si.product_id, SUM(si.qty - si.returned_qty) AS qty, MAX(s.entry_date) AS last_sold,
                          CAST(ROUND(SUM(si.line_total * (si.qty - si.returned_qty) / si.qty)) AS INTEGER) AS revenue FROM sales s JOIN sale_items si ON si.sale_id = s.id
@@ -21,7 +22,7 @@ export async function listProducts(ctx: Ctx) {
      SELECT p.*, ROUND(p.stock_qty * p.avg_cost) AS stock_value${stats ? ', COALESCE(sold.qty, 0) AS sold_30d, COALESCE(sold.revenue, 0) AS revenue_30d, sold.last_sold' : ''},
        img.updated_at AS image_v
      FROM products p ${stats ? 'LEFT JOIN sold ON sold.product_id = p.id' : ''} LEFT JOIN product_images img ON img.product_id = p.id
-     WHERE p.business_id IN (${placeholders(scope)})
+     WHERE p.business_id IN (${placeholders(scope)}) AND p.deleted_at IS ${deleted ? 'NOT NULL' : 'NULL'}
      ORDER BY p.active DESC, p.kind, p.category, p.name`, ...(stats ? [...scope, today(-30)] : []), ...scope);
 }
 
@@ -35,7 +36,8 @@ export async function createProduct(ctx: Ctx) {
   const openingQty = kind === 'fuel' || !track ? 0 : qty(b.openingQty ?? 0, 'Opening quantity', { min: 0 });
   // The cost price is kept even with nothing in stock yet (purchases then average from it).
   const openingCost = kind === 'fuel' || !track ? 0 : Number(cents(b.openingCost ?? 0, 'Cost price'));
-  const name = str(b.name, 'Name', { required: true, max: 120 });
+  const name = str(b.name, 'Name', { required: true, max: 120 })!;
+  await assertNameFree(ctx, business, name);
   const date = entryDate(b.date);
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`INSERT INTO products (id, business_id, name, category, kind, unit, sku, sale_price, avg_cost, track_stock, reorder_level, created_at, created_by)
@@ -53,11 +55,152 @@ export async function createProduct(ctx: Ctx) {
   return tx.commit(idemKey(ctx), { id });
 }
 
+/** Two products with the same name in one business would be confused at the till. */
+async function assertNameFree(ctx: Ctx, business: string, name: string, except = '') {
+  const same = await first<any>(ctx.db, `SELECT id FROM products WHERE business_id = ? AND deleted_at IS NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id <> ?`, business, name, except);
+  if (same) throw new HttpError(409, `“${name}” already exists`);
+}
+
+/**
+ * Bulk upload: up to 25 products per request (the screen sends a large file in parts),
+ * each with name, cost price, selling price and quantity in stock (category optional).
+ * All rows of a request are saved together or not at all; opening stock is one journal entry.
+ */
+export async function bulkCreateProducts(ctx: Ctx) {
+  const b = ctx.body;
+  const business = requireBiz(ctx, b.business, 'catalog');
+  if (business !== 'store') throw bad('Bulk upload is for store products');
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  if (!rows.length) throw bad('No rows to upload');
+  if (rows.length > 25) throw bad('At most 25 rows per request');
+  const date = entryDate(b.date);
+  const existing = new Set((await all<any>(ctx.db, `SELECT LOWER(TRIM(name)) AS n FROM products WHERE business_id = ? AND deleted_at IS NULL`, business)).map((r) => r.n));
+  const seen = new Set<string>();
+  const items: { id: string; name: string; category: string; cost: number; price: number; qty: number }[] = rows.map((r: any, i: number) => {
+    const at = `Row ${Number(r.row) || i + 1}`;
+    const name = str(r.name, `${at}: name`, { required: true, max: 120 })!;
+    const key = name.trim().toLowerCase();
+    if (existing.has(key)) throw new HttpError(409, `${at}: “${name}” already exists`);
+    if (seen.has(key)) throw bad(`${at}: “${name}” is in the file twice`);
+    seen.add(key);
+    return {
+      id: newId(), name, category: str(r.category, `${at}: category`, { max: 60 }) ?? '',
+      cost: Number(cents(r.cost ?? 0, `${at}: cost price`)), price: cents(r.price ?? 0, `${at}: selling price`),
+      qty: qty(r.qty ?? 0, `${at}: quantity`, { min: 0 }),
+    };
+  });
+  const tx = new Tx(ctx.db, ctx.user);
+  const batch = newId();
+  let total = 0;
+  for (const it of items) {
+    tx.run(`INSERT INTO products (id, business_id, name, category, kind, unit, sku, sale_price, avg_cost, track_stock, reorder_level, created_at, created_by)
+            VALUES (?,?,?,?,'item','pcs',NULL,?,?,1,0,?,?)`, it.id, business, it.name, it.category, it.price, it.cost, nowIso(), ctx.user.id);
+    if (it.qty > 0) {
+      const value = Math.round(it.qty * it.cost);
+      total += value;
+      tx.stock({ business, product: it.id, date, type: 'opening', qty: it.qty, unitCost: it.cost, value, refType: 'product_bulk', refId: batch, reason: 'Opening stock (bulk upload)' });
+    }
+  }
+  if (total > 0) {
+    tx.journal({ business, date, type: 'opening_stock', refType: 'product_bulk', refId: batch, memo: `Opening stock: ${items.length} products (bulk upload)`, amount: total },
+      [{ account: 'inventory', amount: total }, { account: 'owner', amount: -total }]);
+  }
+  tx.audit('bulk_create', 'product', batch, business, { count: items.length, names: items.map((i) => i.name), value: total });
+  return tx.commit(idemKey(ctx), { count: items.length, value: total, ids: items.map((i) => i.id) });
+}
+
+/** What deleting a product would do (the Delete window explains it before anything changes). */
+async function productUsage(ctx: Ctx, id: string) {
+  const r = await first<any>(ctx.db, `SELECT
+      (SELECT COUNT(*) FROM stock_movements WHERE product_id = ?) AS moves,
+      (SELECT COUNT(*) FROM stock_movements WHERE product_id = ? AND type <> 'opening') AS real_moves,
+      (SELECT COUNT(*) FROM sale_items WHERE product_id = ?) AS sales,
+      (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?) AS purchases,
+      (SELECT COUNT(*) FROM open_order_items i JOIN open_orders o ON o.id = i.order_id WHERE i.product_id = ?) AS orders,
+      (SELECT COUNT(*) FROM open_order_items i JOIN open_orders o ON o.id = i.order_id WHERE i.product_id = ? AND o.status = 'open') AS open_orders,
+      (SELECT COUNT(*) FROM fuel_tanks WHERE product_id = ?) AS tanks,
+      (SELECT COUNT(*) FROM fuel_shift_readings WHERE product_id = ?) AS readings`, id, id, id, id, id, id, id, id);
+  const used = r.moves + r.sales + r.purchases + r.orders + r.tanks + r.readings > 0;
+  // Only opening stock and nothing else: it can be undone as "added by mistake" (no loss).
+  const onlyOpening = r.moves > 0 && !r.real_moves && !r.sales && !r.purchases && !r.orders && !r.tanks && !r.readings;
+  return { ...r, used, onlyOpening };
+}
+
+async function productFor(ctx: Ctx) {
+  const p = await first<any>(ctx.db, 'SELECT * FROM products WHERE id = ?', ctx.params.id);
+  if (!p) throw new HttpError(404, 'Product not found');
+  requireBiz(ctx, p.business_id, 'catalog');
+  return p;
+}
+
+export async function deleteCheck(ctx: Ctx) {
+  const p = await productFor(ctx);
+  const u = await productUsage(ctx, p.id);
+  return { stock: p.stock_qty, value: Math.round(p.stock_qty * p.avg_cost), used: u.used, onlyOpening: u.onlyOpening, sales: u.sales, purchases: u.purchases, openOrders: u.open_orders };
+}
+
+/**
+ * Delete a product. Never used → removed for good. Used → marked deleted (gone from lists, the
+ * till and pickers; past sales, purchases and stock history keep its name). Stock still on hand is
+ * taken out first: `stock: 'mistake'` undoes opening stock that was entered by mistake (no loss —
+ * only when nothing else ever happened to the product), `stock: 'loss'` records it as a stock loss.
+ */
+export async function deleteProduct(ctx: Ctx) {
+  const p = await productFor(ctx);
+  if (p.deleted_at) throw new HttpError(409, 'Already deleted');
+  if (p.kind === 'fuel') throw bad('Fuel types are changed in the fuel station');
+  const u = await productUsage(ctx, p.id);
+  if (u.open_orders) throw new HttpError(409, `${p.name} is in an open order. Pay or change that order first.`);
+  const reason = str(ctx.body.reason, 'Reason', { max: 300 });
+  const tx = new Tx(ctx.db, ctx.user);
+  const date = today();
+  if (p.track_stock && p.stock_qty !== 0) {
+    const mode = String(ctx.body.stock ?? '');
+    if (p.stock_qty < 0) throw bad(`${p.name} shows ${p.stock_qty} in stock. Correct the count first (Waste / count).`);
+    if (mode !== 'mistake' && mode !== 'loss') throw bad(`${p.name} still has ${p.stock_qty} ${p.unit} in stock. Choose what happened to it.`);
+    if (mode === 'mistake' && !u.onlyOpening) throw bad(`${p.name} has been sold or bought, so its stock cannot be undone as a mistake. Record it as a loss, or count it to 0 first.`);
+    if (mode === 'loss' && !reason) throw bad('Write why the stock is gone (it is recorded as a loss)');
+    await assertDayOpen(ctx.db, p.business_id, date);
+    const value = Math.round(p.stock_qty * p.avg_cost);
+    const ref = newId();
+    if (mode === 'mistake') {
+      tx.stock({ business: p.business_id, product: p.id, date, type: 'opening', qty: -p.stock_qty, unitCost: p.avg_cost, value: -value, refType: 'product', refId: p.id, reason: 'Opening stock undone: product deleted (entered by mistake)' });
+      tx.journal({ business: p.business_id, date, type: 'opening_stock', refType: 'product', refId: p.id, memo: `Opening stock undone (product deleted, entered by mistake): ${p.name}`, amount: value },
+        [{ account: 'inventory', amount: -value }, { account: 'owner', amount: value }]);
+    } else {
+      tx.stock({ business: p.business_id, product: p.id, date, type: 'waste', qty: -p.stock_qty, unitCost: p.avg_cost, value: -value, refType: 'stock', refId: ref, reason: `Product deleted — ${reason}` });
+      tx.journal({ business: p.business_id, date, type: 'stock_waste', refType: 'stock', refId: ref, memo: `Product deleted, stock written off: ${p.stock_qty} ${p.unit} ${p.name} — ${reason}`, amount: value },
+        [{ account: 'inventory', amount: -value }, { account: 'stock_loss', amount: value, category: 'Waste/damage' }]);
+    }
+  }
+  if (!u.used) {
+    tx.run('DELETE FROM price_changes WHERE product_id = ?', p.id);
+    tx.run('DELETE FROM product_images WHERE product_id = ?', p.id);
+    tx.run('DELETE FROM products WHERE id = ?', p.id);
+  } else {
+    tx.run('UPDATE products SET deleted_at = ?, deleted_by = ?, active = 0 WHERE id = ?', nowIso(), ctx.user.id, p.id);
+  }
+  tx.audit('delete', 'product', p.id, p.business_id, { name: p.name, removed: !u.used, stock: p.stock_qty, mode: ctx.body.stock ?? null, reason });
+  return tx.commit(idemKey(ctx), { id: p.id, removed: !u.used });
+}
+
+export async function restoreProduct(ctx: Ctx) {
+  const p = await productFor(ctx);
+  if (!p.deleted_at) throw new HttpError(409, 'This product is not deleted');
+  await assertNameFree(ctx, p.business_id, p.name, p.id);
+  const tx = new Tx(ctx.db, ctx.user);
+  tx.run('UPDATE products SET deleted_at = NULL, deleted_by = NULL, active = 1 WHERE id = ?', p.id);
+  tx.audit('restore', 'product', p.id, p.business_id, { name: p.name });
+  return tx.commit(null, { id: p.id });
+}
+
 export async function updateProduct(ctx: Ctx) {
   const p = await first<any>(ctx.db, 'SELECT * FROM products WHERE id = ?', ctx.params.id);
   if (!p) throw new HttpError(404, 'Product not found');
   requireBiz(ctx, p.business_id, 'catalog');
   const b = ctx.body;
+  if (p.deleted_at) throw new HttpError(409, 'This product is deleted. Restore it first.');
+  if (b.name !== undefined && String(b.name).trim().toLowerCase() !== String(p.name).trim().toLowerCase()) await assertNameFree(ctx, p.business_id, String(b.name), p.id);
   const price = b.salePrice === undefined ? p.sale_price : cents(b.salePrice, 'Selling price');
   const tx = new Tx(ctx.db, ctx.user);
   tx.run(`UPDATE products SET name = ?, category = ?, unit = ?, sku = ?, sale_price = ?, reorder_level = ?, active = ? WHERE id = ?`,
@@ -184,6 +327,7 @@ function party(kind: 'customer' | 'supplier') {
            FROM account_balances WHERE account = '${account}' AND business_id IN (${placeholders(scope)}) GROUP BY ${col}
          ) b ON b.id = c.id
          WHERE c.id IN (SELECT ${col} FROM ${links} WHERE business_id IN (${placeholders(scope)}))
+           AND c.deleted_at IS ${ctx.url.searchParams.get('deleted') === '1' ? 'NOT NULL' : 'NULL'}
          ORDER BY c.active DESC, c.name`, ...scope, ...scope);
       for (const r of rows) r.businesses = String(r.business_list ?? '').split(',').filter(Boolean);
       return rows;
@@ -205,6 +349,7 @@ function party(kind: 'customer' | 'supplier') {
       const linked = await linkedTo(ctx, c.id);
       // Only someone working in a business this record belongs to may change it.
       if (!linked.some((b) => ctx.user.businesses.includes(b) && mayManage(ctx, b))) throw new HttpError(404, 'Not found');
+      if (c.deleted_at) throw new HttpError(409, 'This record is deleted. Restore it first.');
       const b = ctx.body;
       const tx = new Tx(ctx.db, ctx.user);
       tx.run(`UPDATE ${table} SET name = ?, phone = ?, notes = ?, active = ? WHERE id = ?`,
@@ -223,6 +368,46 @@ function party(kind: 'customer' | 'supplier') {
         for (const add of next.filter((x) => !linked.includes(x))) tx.run(`INSERT INTO ${links} (${col}, business_id) VALUES (?,?)`, c.id, add);
       }
       tx.audit('update', kind, c.id, null, { before: { ...c, businesses: linked }, after: b });
+      return tx.commit(null, { id: c.id });
+    },
+    /**
+     * Delete: only when nothing is owed in any business. Never used → removed for good; used in sales,
+     * purchases, payments or the books → marked deleted (gone from lists and pickers, statements stay).
+     */
+    async remove(ctx: Ctx) {
+      const c = await first<any>(ctx.db, `SELECT * FROM ${table} WHERE id = ?`, ctx.params.id);
+      if (!c) throw new HttpError(404, 'Not found');
+      const linked = await linkedTo(ctx, c.id);
+      if (!linked.some((b) => ctx.user.businesses.includes(b) && mayManage(ctx, b))) throw new HttpError(404, 'Not found');
+      if (c.deleted_at) throw new HttpError(409, 'Already deleted');
+      const owed = await first<{ v: number }>(ctx.db, `SELECT COALESCE(SUM(balance), 0) AS v FROM account_balances WHERE account = '${account}' AND ${col} = ?`, c.id);
+      if (owed?.v) {
+        const amount = (Math.abs(owed.v) / 100).toFixed(2);
+        throw new HttpError(409, kind === 'customer' ? `${c.name} still owes ${amount}. Collect it (or record the payment) before deleting.` : `We still owe ${c.name} ${amount}. Pay it before deleting.`);
+      }
+      const refs = kind === 'customer'
+        ? ['sales', 'money_movements', 'fuel_shift_payments', 'journal_lines', 'fuel_sales', 'duty_sales']
+        : ['purchases', 'expenses', 'money_movements', 'journal_lines', 'fuel_stock_log'];
+      const used = await first<{ n: number }>(ctx.db, `SELECT ${refs.map((t) => `(SELECT COUNT(*) FROM ${t} WHERE ${col} = ?1)`).join(' + ')} AS n`, c.id);
+      const tx = new Tx(ctx.db, ctx.user);
+      if (!used?.n) {
+        tx.run(`DELETE FROM ${links} WHERE ${col} = ?`, c.id);
+        tx.run(`DELETE FROM ${table} WHERE id = ?`, c.id);
+      } else {
+        tx.run(`UPDATE ${table} SET deleted_at = ?, deleted_by = ?, active = 0 WHERE id = ?`, nowIso(), ctx.user.id, c.id);
+      }
+      tx.audit('delete', kind, c.id, null, { name: c.name, removed: !used?.n });
+      return tx.commit(idemKey(ctx), { id: c.id, removed: !used?.n });
+    },
+    async restore(ctx: Ctx) {
+      const c = await first<any>(ctx.db, `SELECT * FROM ${table} WHERE id = ?`, ctx.params.id);
+      if (!c) throw new HttpError(404, 'Not found');
+      const linked = await linkedTo(ctx, c.id);
+      if (!linked.some((b) => ctx.user.businesses.includes(b) && mayManage(ctx, b))) throw new HttpError(404, 'Not found');
+      if (!c.deleted_at) throw new HttpError(409, 'Not deleted');
+      const tx = new Tx(ctx.db, ctx.user);
+      tx.run(`UPDATE ${table} SET deleted_at = NULL, deleted_by = NULL, active = 1 WHERE id = ?`, c.id);
+      tx.audit('restore', kind, c.id, null, { name: c.name });
       return tx.commit(null, { id: c.id });
     },
     /** Every charge and payment with a running balance, in the businesses asked for. */

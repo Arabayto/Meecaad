@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Printer, UserCheck, Users } from 'lucide-react';
+import { Printer, RotateCcw, Trash2, UserCheck, Users } from 'lucide-react';
 import { get, money, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
@@ -21,6 +21,13 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
   const [paying, setPaying] = useState<any>(null);
   const [statement, setStatement] = useState<any>(null);
   const [cancelPay, setCancelPay] = useState<any>(null);
+  const [removing, setRemoving] = useState<any>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const deleted = useLoad(() => (showDeleted ? get(`/${kind}`, { business: scopeId, deleted: '1' }) : Promise.resolve(null)), [kind, scopeId, showDeleted]);
+  const { run: runRestore, busy: restoring } = useSubmit();
+  const restore = async (c: any) => {
+    if (await runRestore(() => post(`/${kind}/${c.id}/restore`, {}), `${c.name} is back`)) { deleted.reload(); list.reload(); }
+  };
 
   const rows = (list.data ?? []).filter((c: any) => (showAll || c.balance !== 0 || search) && (!search || `${c.name} ${c.phone ?? ''}`.toLowerCase().includes(search.toLowerCase())));
   const total = (list.data ?? []).reduce((s: number, c: any) => s + c.balance, 0);
@@ -62,6 +69,7 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
                         {canPay && scope === 'business' && c.balance > 0 && <button type="button" className="btn btn-primary btn-xs" onClick={() => setPaying(c)}>{isCustomers ? 'Receive payment' : 'Pay'}</button>}
                         <button type="button" className="btn btn-ghost btn-xs" onClick={async () => setStatement(await get(`/${kind}/${c.id}/statement`, { business: scopeId }))}>Statement</button>
                         {canEdit && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(c)}>Edit</button>}
+                        {canEdit && <button type="button" className="btn btn-ghost btn-xs btn-danger-text" onClick={() => setRemoving(c)} aria-label={`Delete ${c.name}`}><Trash2 size={13} /> Delete</button>}
                       </div>
                     </td>
                   </tr>
@@ -71,8 +79,30 @@ export function PartiesPage({ kind }: { kind: 'customers' | 'suppliers' }) {
             </tbody>
           </table>
         </div>
+        {canEdit && (
+          <div style={{ marginTop: 12 }}>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setShowDeleted((x) => !x)}>{showDeleted ? 'Hide deleted' : `Deleted ${isCustomers ? 'customers' : 'suppliers'}`}</button>
+            {showDeleted && (
+              <div className="table-wrap" style={{ marginTop: 8 }}>
+                <table>
+                  <thead><tr><th>Name</th><th>Phone</th><th>Deleted</th><th></th></tr></thead>
+                  <tbody>
+                    {(deleted.data ?? []).map((c: any) => (
+                      <tr key={c.id}>
+                        <td><strong>{c.name}</strong></td><td className="small">{c.phone}</td><td className="small">{String(c.deleted_at ?? '').slice(0, 10)}</td>
+                        <td style={{ textAlign: 'right' }}><button type="button" className="btn btn-ghost btn-xs" disabled={restoring} onClick={() => restore(c)}><RotateCcw size={13} /> Restore</button></td>
+                      </tr>
+                    ))}
+                    {!deleted.loading && !(deleted.data ?? []).length && <tr><td colSpan={4} className="muted">Nothing deleted. People with no history are removed completely when deleted.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
+      {removing && <DeletePartyModal kind={kind} party={removing} onClose={() => setRemoving(null)} onDone={() => { setRemoving(null); list.reload(); deleted.reload(); }} />}
       {edit && <EditModal kind={kind} party={edit} admin={admin} onClose={() => setEdit(null)} onDone={() => { setEdit(null); list.reload(); }} />}
       {paying && <PayModal kind={kind} party={paying} onClose={() => setPaying(null)} onDone={() => { setPaying(null); list.reload(); }} />}
       <Modal open={Boolean(statement)} onClose={() => setStatement(null)} title="Statement" width="lg"
@@ -174,6 +204,24 @@ function PayModal({ kind, party, onClose, onDone }: { kind: string; party: any; 
         </div>
         {toCents(amount) > party.balance && <div className="mc-error">More than the balance.</div>}
       </div>
+    </Modal>
+  );
+}
+
+function DeletePartyModal({ kind, party, onClose, onDone }: { kind: 'customers' | 'suppliers'; party: any; onClose: () => void; onDone: () => void }) {
+  const { run, busy } = useSubmit();
+  const isCustomers = kind === 'customers';
+  const owes = party.balance !== 0;
+  const remove = async () => {
+    if (await run((key) => post(`/${kind}/${party.id}/delete`, {}, key), `${party.name} deleted`)) onDone();
+  };
+  return (
+    <Modal open onClose={onClose} title={`Delete ${party.name}?`} width="sm"
+      footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-danger" disabled={busy || owes} onClick={remove}><Trash2 size={15} /> Delete</button></>}>
+      {owes
+        ? <div className="mc-error">{isCustomers ? `${party.name} still owes ${money(Math.abs(party.balance))}. Receive the payment first.` : `We still owe ${party.name} ${money(Math.abs(party.balance))}. Pay it first.`}</div>
+        : <p style={{ margin: 0 }}>{party.name} disappears from this list and from the {isCustomers ? 'customer' : 'supplier'} pickers. If they appear in past {isCustomers ? 'sales or payments' : 'purchases or payments'}, those stay as they are and you can bring them back from <strong>Deleted</strong>; otherwise they are removed completely.</p>}
     </Modal>
   );
 }

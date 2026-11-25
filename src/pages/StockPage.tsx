@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PackageSearch, Plus } from 'lucide-react';
+import { PackageSearch, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { fromCents, get, money, num, patch, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { Tabs } from '../components/Tabs';
 import { ErrorBox, Field, Money, MoneyInput, PageHeader, fmtTime, useLoad, useSubmit } from '../components/ui';
 import { ItemPicture } from './RestaurantPage';
+import { ProductBulkUpload } from '../components/ProductBulkUpload';
 
 /** Crop a photo to a square and shrink it to 320 px in the browser (WebP, or JPEG where WebP is not supported). */
 function shrinkPicture(file: File): Promise<string> {
@@ -51,6 +52,34 @@ export function StockPage({ view }: { view: CatalogView }) {
   const moves = useLoad(() => (tab === 'history' ? get('/stock/movements', { business }) : Promise.resolve(null)), [business, tab]);
   const [edit, setEdit] = useState<any>(null);
   const [adjust, setAdjust] = useState<any>(null);
+  const [removing, setRemoving] = useState<any>(null);
+  const [bulk, setBulk] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  // Deleted items (to restore) are only read when that list is open.
+  const deleted = useLoad(() => (tab === 'deleted' || showDeleted ? get('/products', { business, deleted: '1' }) : Promise.resolve(null)), [business, tab, showDeleted]);
+  const deletedRows = (deleted.data ?? []).filter((p: any) => p.kind === kind);
+  const { run: runRestore, busy: restoring } = useSubmit();
+  const restore = async (p: any) => {
+    if (await runRestore(() => post(`/products/${p.id}/restore`, {}), `${p.name} is back`)) { deleted.reload(); products.reload(); }
+  };
+  const deletedList = (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Item</th><th className="num">Selling price</th><th>Deleted</th><th></th></tr></thead>
+        <tbody>
+          {deletedRows.map((p: any) => (
+            <tr key={p.id}>
+              <td><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</td>
+              <td className="num">{money(p.sale_price)}</td>
+              <td className="small">{fmtTime(p.deleted_at)}</td>
+              <td style={{ textAlign: 'right' }}>{can('catalog') && <button type="button" className="btn btn-ghost btn-xs" disabled={restoring} onClick={() => restore(p)}><RotateCcw size={13} /> Restore</button>}</td>
+            </tr>
+          ))}
+          {!deleted.loading && !deletedRows.length && <tr><td colSpan={4} className="muted">Nothing deleted. Items that were never sold or bought are removed completely when deleted, so they are not listed here.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
 
   const all = (products.data ?? []).filter((p: any) => p.kind === kind);
   // Category suggestions come only from this business's own items of this kind.
@@ -69,15 +98,19 @@ export function StockPage({ view }: { view: CatalogView }) {
     <div className="module-page">
       <PageHeader icon={<PackageSearch size={22} />} title={v.title}
         subtitle={menu ? `${live.length} items on the menu${best?.sold_30d ? ` · best seller: ${best.name} (${num(best.sold_30d)} sold in 30 days)` : ''} · ${money(revenue30)} sold in 30 days${unsold ? ` · ${unsold} not sold at all` : ''}` : `Stock value ${money(value)} at cost · ${low} items low or out of stock`}
-        actions={can('catalog') && <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> {v.add}</button>} />
+        actions={can('catalog') && <div className="row">
+          {view === 'products' && <button type="button" className="btn btn-secondary" onClick={() => setBulk(true)}><Upload size={16} /> Bulk upload</button>}
+          <button type="button" className="btn btn-primary" onClick={() => setEdit({})}><Plus size={16} /> {v.add}</button>
+        </div>} />
       <div className="panel">
-        {!menu && <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }]} activeTab={tab} onTabChange={setTab} />}
+        {!menu && <Tabs tabs={[{ key: 'products', label: 'Items' }, { key: 'history', label: 'Stock history' }, ...(can('catalog') ? [{ key: 'deleted', label: 'Deleted' }] : [])]} activeTab={tab} onTabChange={setTab} />}
         <ErrorBox error={products.error} />
-        {tab === 'products' ? (
+        {tab === 'deleted' ? deletedList : tab === 'products' ? (
           <>
             <div className="row" style={{ marginBottom: 12 }}>
               <input className="form-input" style={{ maxWidth: menu ? 260 : 300 }} placeholder={menu ? 'Search name or category' : 'Search'} value={search} onChange={(e) => setSearch(e.target.value)} />
               {menu && hiddenCount > 0 && <label className="row small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> Show hidden items ({hiddenCount})</label>}
+              {menu && can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setShowDeleted((x) => !x)}>{showDeleted ? 'Hide deleted' : 'Deleted items'}</button>}
             </div>
             {kind === 'fuel' && <div className="mc-note" style={{ marginBottom: 12 }}>Fuel stock is kept per tank: record deliveries in Deliveries and tank dips in Pumps &amp; Shifts. Change the price per litre here.</div>}
             <div className="table-wrap">
@@ -96,7 +129,10 @@ export function StockPage({ view }: { view: CatalogView }) {
                           <td className="num">{p.revenue_30d ? money(p.revenue_30d) : <span className="muted">—</span>}</td>
                           <td className="small">{p.last_sold ?? <span className="muted">not in 30 days</span>}</td>
                           <td>{!p.active ? <StatusBadge label="Hidden" /> : p.sold_30d ? <StatusBadge label="On menu" tone="green" /> : <StatusBadge label="Not selling" tone="yellow" />}</td>
-                          <td style={{ textAlign: 'right' }}>{can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>}</td>
+                          <td style={{ textAlign: 'right' }}>{can('catalog') && <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>
+                            <button type="button" className="btn btn-ghost btn-xs btn-danger-text" onClick={() => setRemoving(p)} aria-label={`Delete ${p.name}`}><Trash2 size={13} /> Delete</button>
+                          </div>}</td>
                         </tr>
                       ))}
                       {!products.loading && !rows.length && <tr><td colSpan={8} className="muted">{search ? 'Nothing matches.' : 'No items yet. Add your dishes and drinks with a picture and price.'}</td></tr>}
@@ -123,6 +159,7 @@ export function StockPage({ view }: { view: CatalogView }) {
                               <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAdjust(p)}>{p.kind === 'ingredient' ? 'Use / waste' : 'Waste / count'}</button>
                             ) : null}
                             {can('catalog') && <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEdit(p)}>Edit</button>}
+                            {can('catalog') && p.kind !== 'fuel' && <button type="button" className="btn btn-ghost btn-xs btn-danger-text" onClick={() => setRemoving(p)} aria-label={`Delete ${p.name}`}><Trash2 size={13} /> Delete</button>}
                           </div>
                         </td>
                       </tr>
@@ -133,6 +170,7 @@ export function StockPage({ view }: { view: CatalogView }) {
                 </>)}
               </table>
             </div>
+            {menu && showDeleted && <div style={{ marginTop: 16 }}><h3 style={{ fontSize: 15, margin: '0 0 8px' }}>Deleted items</h3>{deletedList}</div>}
           </>
         ) : (
           <div className="table-wrap">
@@ -157,6 +195,8 @@ export function StockPage({ view }: { view: CatalogView }) {
       </div>
 
       {edit && <ProductModal product={edit} view={view} categories={categories} onClose={() => setEdit(null)} onDone={() => { setEdit(null); products.reload(); }} />}
+      {removing && <DeleteProductModal product={removing} onClose={() => setRemoving(null)} onDone={() => { setRemoving(null); products.reload(); deleted.reload(); moves.reload(); }} />}
+      {bulk && <ProductBulkUpload existing={all.map((p: any) => p.name)} onClose={() => setBulk(false)} onSaved={() => { products.reload(); moves.reload(); }} />}
       {adjust && <AdjustModal product={adjust} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); products.reload(); moves.reload(); }} />}
     </div>
   );
@@ -316,6 +356,57 @@ function AdjustModal({ product, onClose, onDone }: { product: any; onClose: () =
         {qty !== '' && <div className={change < 0 ? 'mc-warn' : 'mc-note'}>Stock change {change > 0 ? '+' : ''}{num(change)} {product.unit} · value {money(Math.round(change * product.avg_cost))}
           {type === 'usage' ? ' (counted as cost of food sold)' : ' (counted as a loss)'}</div>}
         <Field label={type === 'usage' ? 'Note (optional)' : 'Reason (required)'}><input className="form-input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** Delete a product — explains first what happens to its stock and its history. */
+function DeleteProductModal({ product, onClose, onDone }: { product: any; onClose: () => void; onDone: () => void }) {
+  const check = useLoad(() => get(`/products/${product.id}/delete-check`), [product.id]);
+  const c = check.data;
+  const [stock, setStock] = useState<'' | 'mistake' | 'loss'>('');
+  const [reason, setReason] = useState('');
+  const { run, busy } = useSubmit();
+  const hasStock = Boolean(c && product.track_stock && c.stock > 0);
+  const mode = stock || (c?.onlyOpening ? 'mistake' : 'loss');
+  const blocked = !c || c.openOrders > 0 || c.stock < 0 || (hasStock && mode === 'loss' && !reason.trim());
+  const remove = async () => {
+    const r = await run((key) => post(`/products/${product.id}/delete`, { stock: hasStock ? mode : undefined, reason }, key), `${product.name} deleted`);
+    if (r) onDone();
+  };
+  return (
+    <Modal open onClose={onClose} title={`Delete ${product.name}?`} width="sm"
+      footer={<><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-danger" disabled={busy || blocked} onClick={remove}><Trash2 size={15} /> {busy ? 'Deleting…' : 'Delete'}</button></>}>
+      <div className="form-stack">
+        <ErrorBox error={check.error} />
+        {!c ? <p className="muted">Checking…</p> : c.openOrders > 0 ? (
+          <div className="mc-error">It is in an open order. Pay or change that order first.</div>
+        ) : c.stock < 0 ? (
+          <div className="mc-error">Stock shows {num(c.stock)}. Correct the count first (Waste / count).</div>
+        ) : (
+          <>
+            <p style={{ margin: 0 }}>
+              {c.used
+                ? <>It disappears from this list, the till and purchases. Past sales, purchases and reports keep it{c.sales ? ` (sold ${num(c.sales)} time${c.sales === 1 ? '' : 's'})` : ''}. You can bring it back from <strong>Deleted</strong>.</>
+                : <>It was never sold or bought, so it is removed completely.</>}
+            </p>
+            {hasStock && (
+              <div className="form-stack">
+                <div className="mc-warn">It still has <strong>{num(c.stock)} {product.unit}</strong> in stock, worth <strong>{money(c.value)}</strong> at cost. What happened to it?</div>
+                {c.onlyOpening && (
+                  <label className="choice"><input type="radio" name="stock" checked={mode === 'mistake'} onChange={() => setStock('mistake')} />
+                    <span><strong>Added by mistake</strong><span className="small muted"> — undo this stock. No loss, profit does not change.</span></span></label>
+                )}
+                <label className="choice"><input type="radio" name="stock" checked={mode === 'loss'} onChange={() => setStock('loss')} />
+                  <span><strong>It is gone</strong><span className="small muted"> — thrown away, damaged or lost. {money(c.value)} is recorded as a stock loss.</span></span></label>
+                {!c.onlyOpening && <p className="small muted" style={{ margin: 0 }}>Still on the shelf? Keep the product and sell it, or count it to 0 with Waste / count first.</p>}
+                {mode === 'loss' && <Field label="Why is the stock gone? (required)"><input className="form-input" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus /></Field>}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </Modal>
   );

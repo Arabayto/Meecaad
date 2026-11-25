@@ -823,6 +823,94 @@ try {
     assert.equal((await fm.call('POST', '/expense-categories', { business: 'store', name: 'Hack' })).status, 403, 'a fuel manager does not manage the store list');
   });
 
+  await step('store CRUD: delete and restore products, customers and suppliers safely; bulk upload products', async () => {
+    const storePnl = async () => (await owner.get(`/reports/summary?business=store&from=${today}&to=${today}`)).profit.store;
+    const stockValue = async () => (await owner.get('/products?business=store')).reduce((t, p) => t + (p.track_stock ? p.stock_value : 0), 0);
+    // Today was closed by the closing test: reopen it for this work, close it again at the end.
+    const todayClosing = (await owner.get('/closing?business=store')).find((c) => c.entry_date === today && !c.reopened_at);
+    await owner.post(`/closing/${todayClosing.id}/reopen`, { reason: 'Product clean-up' });
+    const loss0 = (await storePnl()).losses, value0 = await stockValue();
+    // Same name twice is refused.
+    assert.equal((await owner.call('POST', '/products', { business: 'store', name: 'Rice 25KG ', kind: 'item', salePrice: 1 })).status, 409, 'duplicate name');
+    // Never used → removed completely.
+    const unused = (await owner.post('/products', { business: 'store', name: 'Typo product', kind: 'item', salePrice: 100, openingCost: 50 })).id;
+    const r1 = await owner.post(`/products/${unused}/delete`, {});
+    assert.equal(r1.removed, true);
+    assert.equal(sql(`SELECT COUNT(*) n FROM products WHERE id = '${unused}'`)[0].n, 0, 'row removed');
+    assert.ok(!(await owner.get('/products?business=store&deleted=1')).some((p) => p.id === unused));
+    // Only opening stock, added by mistake → undone with no loss; kept as deleted (its stock history stays).
+    const mistake = (await owner.post('/products', { business: 'store', name: 'Wrong item', kind: 'item', salePrice: 300, openingCost: 200, openingQty: 10 })).id;
+    assert.equal(await stockValue(), value0 + 2000);
+    const chk = await owner.get(`/products/${mistake}/delete-check`);
+    assert.deepEqual([chk.stock, chk.value, chk.used, chk.onlyOpening], [10, 2000, true, true]);
+    assert.equal((await owner.call('POST', `/products/${mistake}/delete`, {})).status, 400, 'must say what happened to the stock');
+    await owner.post(`/products/${mistake}/delete`, { stock: 'mistake' });
+    assert.equal(await stockValue(), value0, 'stock value back');
+    assert.equal((await storePnl()).losses, loss0, 'a mistake is not a loss');
+    assert.ok(!(await owner.get('/products?business=store')).some((p) => p.id === mistake), 'gone from the list');
+    assert.ok((await owner.get('/products?business=store&deleted=1')).some((p) => p.id === mistake), 'listed as deleted');
+    assert.equal((await owner.call('PATCH', `/products/${mistake}`, { salePrice: 1 })).status, 409, 'deleted cannot be edited');
+    await owner.post(`/products/${mistake}/restore`, {});
+    const back = (await owner.get('/products?business=store')).find((p) => p.id === mistake);
+    assert.deepEqual([back.active, back.stock_qty], [1, 0], 'restored, with no stock');
+    await owner.post(`/products/${mistake}/delete`, {});
+    // Sold → cannot be "undone as a mistake"; written off as a loss (reason required). History keeps its name.
+    const sold = (await owner.post('/products', { business: 'store', name: 'Old stock', kind: 'item', salePrice: 500, openingCost: 300, openingQty: 4 })).id;
+    const sale = await owner.post('/sales', { business: 'store', customer, items: [{ product: sold, qty: 1 }], payments: [] });
+    assert.equal((await owner.call('POST', `/products/${sold}/delete`, { stock: 'mistake' })).status, 400);
+    assert.equal((await owner.call('POST', `/products/${sold}/delete`, { stock: 'loss' })).status, 400, 'reason required');
+    await owner.post(`/products/${sold}/delete`, { stock: 'loss', reason: 'Expired' });
+    assert.equal((await storePnl()).losses, loss0 + 900, '3 left × 3.00 written off');
+    assert.equal((await owner.get(`/sales/${sale.id}`)).items[0].name, 'Old stock', 'past sale keeps the name');
+    assert.equal((await owner.call('POST', '/sales', { business: 'store', items: [{ product: sold, qty: 1 }], payments: [] , customer })).status, 400, 'cannot be sold');
+    assert.equal((await owner.call('POST', '/purchases', { business: 'store', items: [{ product: sold, qty: 1, total: 100 }], paid: 100, method: 'cash' })).status, 400, 'cannot be bought');
+    assert.equal(await stockValue(), value0, 'no stock value left behind');
+    // A cashier cannot delete or upload.
+    await owner.post('/users', { fullName: 'Crud Till', username: 'crudtill', password: 'crud-till-55', access: { store: 'cashier' } });
+    const ct = client(); await ct.post('/auth/login', { username: 'crudtill', password: 'crud-till-55' });
+    assert.equal((await ct.call('POST', `/products/${mistake}/restore`, {})).status, 403);
+    assert.equal((await ct.call('POST', '/products/bulk', { business: 'store', rows: [{ name: 'X', cost: 1, price: 2, qty: 1 }] })).status, 403);
+    // Bulk upload: all rows of a part together, retry-safe, duplicates refuse the whole part.
+    const rows = [{ row: 1, name: 'Bulk soap', cost: 50, price: 80, qty: 10 }, { row: 2, name: 'Bulk tea', cost: 200, price: 300, qty: 5, category: 'Drinks' }, { row: 3, name: 'Bulk matches', cost: 5, price: 10, qty: 0 }];
+    const key = crypto.randomUUID();
+    const up = await owner.post('/products/bulk', { business: 'store', rows }, key);
+    assert.deepEqual([up.count, up.value], [3, 1500]);
+    assert.equal((await owner.post('/products/bulk', { business: 'store', rows }, key)).count, 3, 'retry returns the same result');
+    const list = await owner.get('/products?business=store');
+    const bt = list.find((p) => p.name === 'Bulk tea');
+    assert.deepEqual([bt.avg_cost, bt.sale_price, bt.stock_qty, bt.category, bt.unit], [200, 300, 5, 'Drinks', 'pcs']);
+    assert.equal(list.filter((p) => p.name.startsWith('Bulk ')).length, 3, 'nothing doubled');
+    assert.equal(await stockValue(), value0 + 1500);
+    const dup = await owner.call('POST', '/products/bulk', { business: 'store', rows: [{ name: 'Bulk new', cost: 1, price: 2, qty: 1 }, { row: 2, name: 'bulk soap', cost: 1, price: 2, qty: 1 }] });
+    assert.equal(dup.status, 409);
+    assert.ok(!(await owner.get('/products?business=store')).some((p) => p.name === 'Bulk new'), 'nothing from a refused part is saved');
+    assert.equal((await owner.call('POST', '/products/bulk', { business: 'store', rows: [{ name: 'A', cost: 1, price: 2, qty: 1 }, { name: 'a', cost: 1, price: 2, qty: 1 }] })).status, 400, 'twice in the file');
+    assert.equal((await owner.call('POST', '/products/bulk', { business: 'store', rows: Array.from({ length: 26 }, (_, i) => ({ name: `R${i}`, cost: 1, price: 1, qty: 1 })) })).status, 400, 'parts of 25 at most');
+    assert.equal((await owner.call('POST', '/products/bulk', { business: 'store', rows: [{ name: 'Neg', cost: 1, price: 2, qty: -3 }] })).status, 400, 'negative quantity');
+    // Customers: not while they owe; no history → removed; with history → deleted and restorable.
+    const owing = (await owner.get('/customers?business=store')).find((c) => c.balance > 0);
+    assert.equal((await owner.call('POST', `/customers/${owing.id}/delete`, {})).status, 409, 'still owes');
+    const fresh = (await owner.post('/customers', { business: 'store', name: 'Walk-by' })).id;
+    assert.equal((await owner.post(`/customers/${fresh}/delete`, {})).removed, true);
+    assert.equal(sql(`SELECT COUNT(*) n FROM customers WHERE id = '${fresh}'`)[0].n, 0);
+    const paidUp = (await owner.post('/customers', { business: 'store', name: 'Paid up' })).id;
+    const cs = await owner.post('/sales', { business: 'store', customer: paidUp, items: [{ product: bt.id, qty: 1 }], payments: [] });
+    await owner.post('/money', { business: 'store', type: 'customer_payment', customer: paidUp, amount: 300, method: 'zaad' });
+    assert.equal((await owner.post(`/customers/${paidUp}/delete`, {})).removed, false, 'kept as deleted (has history)');
+    assert.ok(!(await owner.get('/customers?business=store')).some((c) => c.id === paidUp), 'gone from the list and pickers');
+    assert.equal((await owner.get(`/sales/${cs.id}`)).customer_name, 'Paid up', 'past sale keeps the customer');
+    assert.equal((await owner.call('POST', '/sales', { business: 'store', customer: paidUp, items: [{ product: bt.id, qty: 1 }], payments: [] })).status === 200, false, 'no new credit to a deleted customer');
+    await owner.post(`/customers/${paidUp}/restore`, {});
+    assert.ok((await owner.get('/customers?business=store')).some((c) => c.id === paidUp), 'restored');
+    // Suppliers: not while we owe them.
+    const owed = (await owner.get('/suppliers?business=store')).find((x) => x.balance > 0);
+    if (owed) assert.equal((await owner.call('POST', `/suppliers/${owed.id}/delete`, {})).status, 409, 'still owed');
+    const sup2 = (await owner.post('/suppliers', { business: 'store', name: 'Never used supplier' })).id;
+    assert.equal((await owner.post(`/suppliers/${sup2}/delete`, {})).removed, true);
+    const pre = await owner.get(`/closing/preview?business=store&date=${today}`);
+    await owner.post('/closing', { business: 'store', date: today, counted: Object.fromEntries(pre.lines.map((l) => [l.method_id, l.expected])), explanation: 'Recount after clean-up' });
+  });
+
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
     assert.deepEqual(sql('SELECT entry_id, SUM(amount) s FROM journal_lines GROUP BY entry_id HAVING s <> 0'), []);
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);

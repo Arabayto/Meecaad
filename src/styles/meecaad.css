@@ -281,3 +281,18 @@
 .rpos-paybtn { min-height: 52px; font-size: 16px; }
 @media (max-width: 1024px) { .rpos-cart { max-height: none; overflow: visible; } }
 .rpos-links .btn { width: auto !important; }
+
+/* Delete / restore and bulk upload */
+.btn-danger-text { color: #b91c1c !important; }
+.btn-danger-text:hover { background: #fef2f2 !important; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--primary); background: var(--primary-lighter); }
+.choice input { margin-top: 3px; }
+.pill { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: var(--bg); border: 1px solid var(--border); }
+.pill--ok { background: #ecfdf3; border-color: #a7f3c9; color: #067647; }
+.pill--bad { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+.bulk-steps { display: grid; gap: 6px; font-size: 14px; }
+.bulk-paste { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.bulk-preview { max-height: 320px; overflow: auto; }
+.bulk-row--bad td { background: #fef2f2; }
+.bulk-row--saved td { color: var(--text-muted); }

@@ -219,7 +219,7 @@ export async function createPurchase(ctx: Ctx) {
   await assertShiftCurrent(ctx, business);
   const items = Array.isArray(b.items) ? b.items : [];
   if (!items.length) throw bad('Add at least one item');
-  const products = await all<any>(ctx.db, `SELECT * FROM products WHERE business_id = ? AND track_stock = 1 AND id IN (${placeholders(items)})`,
+  const products = await all<any>(ctx.db, `SELECT * FROM products WHERE business_id = ? AND track_stock = 1 AND deleted_at IS NULL AND id IN (${placeholders(items)})`,
     business, ...items.map((i: any) => String(i.product)));
   const tanks = business === 'fuel' ? await all<any>(ctx.db, 'SELECT * FROM fuel_tanks WHERE active = 1') : [];
   const lines = items.map((i: any) => {
