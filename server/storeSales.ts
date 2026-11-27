@@ -63,7 +63,7 @@ export async function records(ctx: Ctx) {
     const parts: string[] = [];
     if (Number.isInteger(n) && n > 0) { parts.push('SELECT id FROM sales WHERE business_id = ? AND number = ?'); fromArgs.push(business, n); }
     if (custs.length) { parts.push(`SELECT id FROM sales WHERE customer_id IN (${placeholders(custs)})`); fromArgs.push(...custs.map((c) => c.id)); }
-    if (prods.length) { parts.push(`SELECT sale_id FROM sale_items WHERE product_id IN (${placeholders(prods)})`); fromArgs.push(...prods.map((x) => x.id)); }
+    if (prods.length) { parts.push(`SELECT sale_id AS id FROM sale_items WHERE product_id IN (${placeholders(prods)})`); fromArgs.push(...prods.map((x) => x.id)); }
     if (!parts.length) where.push('0');
     else salesFrom = `(${parts.join(' UNION ')}) m CROSS JOIN sales s ON s.id = m.id`;
   }
