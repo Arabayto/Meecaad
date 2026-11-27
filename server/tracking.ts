@@ -26,7 +26,7 @@ function range(ctx: Ctx) {
  */
 async function days(db: D1Database, business: string, from: string, to: string) {
   const rows = await all<{ entry_date: string; account: string; category: string; total: number }>(db,
-    `SELECT entry_date, account, category, SUM(debit - credit) AS total FROM daily_totals
+    `SELECT entry_date, account, category, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account
      WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL)}) GROUP BY entry_date, account, category`, business, from, to, ...PNL);
   const map = new Map<string, Day>();
   const expenses = new Map<string, number>();

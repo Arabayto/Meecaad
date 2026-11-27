@@ -16,7 +16,7 @@ const emptyPnl = (): Pnl => ({ revenue: 0, cogs: 0, expenses: 0, losses: 0, cash
 /** P&L amounts per day, business and account, from the daily totals (not the full journal). */
 function pnlRows(db: D1Database, scope: string[], from: string, to: string) {
   return all<{ entry_date: string; business_id: string; account: string; total: number }>(db,
-    `SELECT entry_date, business_id, account, SUM(debit - credit) AS total FROM daily_totals
+    `SELECT entry_date, business_id, account, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account
      WHERE business_id IN (${placeholders(scope)}) AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)})
      GROUP BY entry_date, business_id, account`, ...scope, from, to, ...PNL_ACCOUNTS);
 }
@@ -76,8 +76,8 @@ async function closingLines(db: D1Database, business: string, date: string) {
   // Opening = balance now − everything from this day on (reads only recent days, never the whole history).
   const [current, since, day] = await Promise.all([
     all<any>(db, `SELECT method_id, balance FROM account_balances WHERE business_id = ? AND account = 'cash'`, business),
-    all<any>(db, `SELECT method_id, SUM(debit - credit) AS total FROM daily_totals WHERE business_id = ? AND entry_date >= ? AND account = 'cash' GROUP BY method_id`, business, date),
-    all<any>(db, `SELECT method_id, entry_type, SUM(debit - credit) AS total, SUM(debit + credit) AS n FROM daily_totals
+    all<any>(db, `SELECT method_id, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id = ? AND entry_date >= ? AND account = 'cash' GROUP BY method_id`, business, date),
+    all<any>(db, `SELECT method_id, entry_type, SUM(debit - credit) AS total, SUM(debit + credit) AS n FROM daily_totals INDEXED BY idx_daily_totals_account
                   WHERE business_id = ? AND entry_date = ? AND account = 'cash' AND entry_type NOT IN ('closing_diff', 'closing_reopen') GROUP BY method_id, entry_type`, business, date),
   ]);
   return methods.map((m) => {
@@ -112,7 +112,7 @@ export async function dashboard(ctx: Ctx) {
                  WHERE account = 'payable' AND business_id IN (${p}) AND balance <> 0 GROUP BY business_id`, ...scope),
     all(ctx.db, `SELECT business_id, ROUND(SUM(stock_qty * avg_cost)) AS value FROM products WHERE business_id IN (${p}) AND track_stock = 1 GROUP BY business_id`, ...scope),
     all(ctx.db, `SELECT business_id, entry_type, SUM(debit) AS money_in, SUM(credit) AS money_out
-                 FROM daily_totals WHERE business_id IN (${p}) AND entry_date = ? AND account = 'cash' GROUP BY business_id, entry_type`, ...scope, t),
+                 FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id IN (${p}) AND entry_date = ? AND account = 'cash' GROUP BY business_id, entry_type`, ...scope, t),
     all(ctx.db, `SELECT e.id, e.business_id, e.entry_date, e.type, e.memo, e.amount, e.ref_type, e.ref_id, e.created_at, u.full_name AS created_by_name
                  FROM journal_entries e INDEXED BY idx_journal_created JOIN users u ON u.id = e.created_by
                  WHERE e.business_id IN (${p}) ORDER BY e.created_at DESC LIMIT 25`, ...scope),
@@ -193,12 +193,12 @@ export async function summary(ctx: Ctx) {
   const p = placeholders(scope);
   const [profit, expenses, losses, cashFlow, topProducts, fuel, daily, credit] = await Promise.all([
     pnl(ctx.db, scope, from, to),
-    all(ctx.db, `SELECT business_id, category, SUM(debit - credit) AS total FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'expense'
+    all(ctx.db, `SELECT business_id, category, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'expense'
                  GROUP BY business_id, category HAVING SUM(debit - credit) <> 0 ORDER BY total DESC`, ...scope, from, to),
-    all(ctx.db, `SELECT business_id, account, CASE WHEN category = '' THEN account ELSE category END AS category, SUM(debit - credit) AS total FROM daily_totals
+    all(ctx.db, `SELECT business_id, account, CASE WHEN category = '' THEN account ELSE category END AS category, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account
                  WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account IN ('stock_loss', 'cash_diff') GROUP BY business_id, account, 3 HAVING SUM(debit - credit) <> 0`, ...scope, from, to),
     all(ctx.db, `SELECT business_id, entry_type, SUM(debit) AS money_in, SUM(credit) AS money_out
-                 FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'cash' GROUP BY business_id, entry_type ORDER BY business_id, entry_type`, ...scope, from, to),
+                 FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'cash' GROUP BY business_id, entry_type ORDER BY business_id, entry_type`, ...scope, from, to),
     all(ctx.db, `SELECT s.business_id, si.product_id, si.name, ROUND(SUM(si.qty - si.returned_qty), 3) AS qty,
                    SUM(ROUND(si.line_total * (1.0 - si.returned_qty / si.qty) * (CASE WHEN s.subtotal > 0 THEN s.total * 1.0 / s.subtotal ELSE 0 END))) AS revenue,
                    SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)) AS cost,
@@ -211,14 +211,14 @@ export async function summary(ctx: Ctx) {
                      WHERE s.business_id = 'fuel' AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ? GROUP BY p.id`, from, to)
       : Promise.resolve([]),
     all(ctx.db, `SELECT entry_date, business_id, -SUM(CASE WHEN account = 'sales' THEN debit - credit ELSE 0 END) AS revenue, -SUM(debit - credit) AS profit
-                 FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)})
+                 FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)})
                  GROUP BY entry_date, business_id ORDER BY entry_date DESC`, ...scope, from, to, ...PNL_ACCOUNTS),
     all(ctx.db, `SELECT business_id, SUM(debit) AS given, SUM(credit) AS collected
-                 FROM daily_totals WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'receivable' GROUP BY business_id`, ...scope, from, to),
+                 FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND account = 'receivable' GROUP BY business_id`, ...scope, from, to),
   ]);
   const [methods, counts] = await Promise.all([
     // Money taken for sales (net of refunds/cancellations), per payment method.
-    all(ctx.db, `SELECT t.business_id, t.method_id, pm.name AS method_name, SUM(t.debit - t.credit) AS total FROM daily_totals t JOIN payment_methods pm ON pm.id = t.method_id
+    all(ctx.db, `SELECT t.business_id, t.method_id, pm.name AS method_name, SUM(t.debit - t.credit) AS total FROM daily_totals t INDEXED BY idx_daily_totals_account JOIN payment_methods pm ON pm.id = t.method_id
                  WHERE t.business_id IN (${p}) AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_shift', 'fuel_shift_void', 'fuel_settle', 'fuel_sale', 'fuel_sale_void')
                  GROUP BY t.business_id, t.method_id HAVING SUM(t.debit - t.credit) <> 0 ORDER BY pm.sort`, ...scope, from, to),
     all(ctx.db, `SELECT business_id, entry_date, COUNT(*) AS sales FROM sales WHERE business_id IN (${p}) AND entry_date BETWEEN ? AND ? AND status = 'completed'
@@ -263,13 +263,13 @@ export async function businessReport(ctx: Ctx) {
     first<any>(ctx.db, `SELECT COUNT(*) AS items, COALESCE(ROUND(SUM(CASE WHEN stock_qty > 0 THEN stock_qty * avg_cost END)), 0) AS value FROM products WHERE business_id = ? AND active = 1 AND track_stock = 1`, business),
     all(ctx.db, `SELECT u.full_name AS name, COUNT(*) AS count, SUM(s.total - s.returned_amount) AS total FROM sales s JOIN users u ON u.id = s.created_by
       WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed' GROUP BY s.created_by ORDER BY total DESC`, business, from, to),
-    all(ctx.db, `SELECT pm.name AS method, SUM(t.debit - t.credit) AS total FROM daily_totals t JOIN payment_methods pm ON pm.id = t.method_id
+    all(ctx.db, `SELECT pm.name AS method, SUM(t.debit - t.credit) AS total FROM daily_totals t INDEXED BY idx_daily_totals_account JOIN payment_methods pm ON pm.id = t.method_id
       WHERE t.business_id = ? AND t.entry_date BETWEEN ? AND ? AND t.account = 'cash' AND t.entry_type IN ('sale', 'sale_void', 'sale_return', 'fuel_sale', 'fuel_sale_void')
       GROUP BY t.method_id HAVING SUM(t.debit - t.credit) <> 0 ORDER BY pm.sort`, business, from, to),
-    all(ctx.db, `SELECT category, SUM(debit - credit) AS total FROM daily_totals WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'expense'
+    all(ctx.db, `SELECT category, SUM(debit - credit) AS total FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'expense'
       GROUP BY category HAVING SUM(debit - credit) <> 0 ORDER BY total DESC`, business, from, to),
     all(ctx.db, `SELECT entry_date, -SUM(CASE WHEN account = 'sales' THEN debit - credit ELSE 0 END) AS revenue, -SUM(debit - credit) AS profit
-      FROM daily_totals WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)}) GROUP BY entry_date ORDER BY entry_date`, business, from, to, ...PNL_ACCOUNTS),
+      FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL_ACCOUNTS)}) GROUP BY entry_date ORDER BY entry_date`, business, from, to, ...PNL_ACCOUNTS),
     all(ctx.db, `SELECT c.id, c.name, COUNT(*) AS count, SUM(s.total - s.returned_amount) AS total FROM sales s JOIN customers c ON c.id = s.customer_id
       WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed' GROUP BY c.id ORDER BY total DESC LIMIT 10`, business, from, to),
     all(ctx.db, `SELECT c.name, b.balance, b.last_decrease AS last_paid FROM account_balances b JOIN customers c ON c.id = b.customer_id
@@ -278,7 +278,7 @@ export async function businessReport(ctx: Ctx) {
       WHERE b.business_id = ? AND b.account = 'payable' AND b.balance < 0 ORDER BY b.balance LIMIT 10`, business),
     first<any>(ctx.db, `SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total, COALESCE(SUM(paid_amount), 0) AS paid FROM purchases
       WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND status = 'completed'`, business, from, to),
-    first<any>(ctx.db, `SELECT COALESCE(SUM(debit), 0) AS given, COALESCE(SUM(credit), 0) AS collected FROM daily_totals
+    first<any>(ctx.db, `SELECT COALESCE(SUM(debit), 0) AS given, COALESCE(SUM(credit), 0) AS collected FROM daily_totals INDEXED BY idx_daily_totals_account
       WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'receivable'`, business, from, to),
     first<any>(ctx.db, `SELECT COALESCE(ROUND(SUM(si.qty - si.returned_qty), 3), 0) AS qty FROM sale_items si JOIN sales s ON s.id = si.sale_id
       WHERE s.business_id = ? AND s.entry_date BETWEEN ? AND ? AND s.status = 'completed'`, business, from, to),
@@ -330,7 +330,7 @@ export async function closingPreview(ctx: Ctx) {
     first<any>(ctx.db, `SELECT MAX(entry_date) AS d FROM daily_closings WHERE business_id = ? AND status = 'closed'`, business),
     pnl(ctx.db, [business], date, date),
     first<any>(ctx.db, `SELECT COALESCE(SUM(debit), 0) AS given, COALESCE(SUM(credit), 0) AS collected
-                        FROM daily_totals WHERE business_id = ? AND entry_date = ? AND account = 'receivable'`, business, date),
+                        FROM daily_totals INDEXED BY idx_daily_totals_account WHERE business_id = ? AND entry_date = ? AND account = 'receivable'`, business, date),
   ]);
   // The day in plain numbers: sales, returns and cancellations, purchases, and what was spent on what.
   const [sales, items, purchases, expenses] = await Promise.all([
