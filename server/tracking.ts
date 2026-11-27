@@ -44,7 +44,7 @@ async function days(db: D1Database, business: string, from: string, to: string) 
 async function saleCount(db: D1Database, business: string, from: string, to: string) {
   const r = business === 'fuel'
     ? await first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM duty_sales WHERE business_id = 'fuel' AND status = 'completed' AND entry_date BETWEEN ? AND ?`, from, to)
-    : await first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM sales WHERE business_id = ? AND status = 'completed' AND entry_date BETWEEN ? AND ?`, business, from, to);
+    : await first<{ n: number }>(db, `SELECT COALESCE(SUM(count), 0) AS n FROM sales_daily WHERE business_id = ? AND entry_date BETWEEN ? AND ?`, business, from, to);
   return r?.n ?? 0;
 }
 
@@ -57,13 +57,10 @@ function items(db: D1Database, business: string, from: string, to: string) {
       FROM duty_sales WHERE business_id = 'fuel' AND status = 'completed' AND entry_date BETWEEN ? AND ?
       GROUP BY COALESCE(item_id, ''), COALESCE(item_name, 'Sales without an item')`, from, to);
   }
-  return all<any>(db, `SELECT si.product_id AS id, si.name, ROUND(SUM(si.qty - si.returned_qty), 3) AS qty,
-      SUM(ROUND(si.line_total * (1.0 - si.returned_qty / si.qty) * (CASE WHEN s.subtotal > 0 THEN s.total * 1.0 / s.subtotal ELSE 0 END))) AS revenue,
-      SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)) AS cost, COUNT(DISTINCT s.id) AS sales,
-      SUM(CASE WHEN si.unit_cost > si.unit_price THEN ROUND((si.unit_cost - si.unit_price) * (si.qty - si.returned_qty)) ELSE 0 END) AS below_cost
-    FROM sale_items si JOIN sales s ON s.id = si.sale_id
-    WHERE s.business_id = ? AND s.status = 'completed' AND s.entry_date BETWEEN ? AND ?
-    GROUP BY si.product_id`, business, from, to);
+  // One row per product per day (item_daily, kept by triggers on every sale, return and cancellation).
+  return all<any>(db, `SELECT product_id AS id, MAX(name) AS name, ROUND(SUM(qty), 3) AS qty, CAST(ROUND(SUM(revenue)) AS INTEGER) AS revenue,
+      CAST(ROUND(SUM(cost)) AS INTEGER) AS cost, SUM(lines) AS sales, CAST(ROUND(SUM(below_cost)) AS INTEGER) AS below_cost
+    FROM item_daily WHERE business_id = ? AND entry_date BETWEEN ? AND ? GROUP BY product_id`, business, from, to);
 }
 
 /** GET /tracking/profit?business&from&to — profit tracking for one business, compared with the period before. */

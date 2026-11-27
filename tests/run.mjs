@@ -954,6 +954,17 @@ try {
 
   await step('database integrity: every journal entry balances, nothing deleted, audit kept', async () => {
     assert.deepEqual(sql('SELECT entry_id, SUM(amount) s FROM journal_lines GROUP BY entry_id HAVING s <> 0'), []);
+    // Profit-tracking summaries (kept by triggers) agree with the sale records they summarise.
+    assert.deepEqual(sql(`SELECT d.business_id, d.entry_date, d.product_id FROM item_daily d LEFT JOIN (
+        SELECT s.business_id b, s.entry_date e, si.product_id p, SUM(si.qty - si.returned_qty) q,
+               SUM(si.line_total * (1.0 - si.returned_qty / si.qty) * (CASE WHEN s.subtotal > 0 THEN s.total * 1.0 / s.subtotal ELSE 0 END)) r,
+               SUM((si.qty - si.returned_qty) * si.unit_cost) c, COUNT(*) n
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.status = 'completed' GROUP BY 1, 2, 3) x
+        ON x.b = d.business_id AND x.e = d.entry_date AND x.p = d.product_id
+      WHERE ABS(d.qty - COALESCE(x.q, 0)) > 0.0005 OR ABS(d.revenue - COALESCE(x.r, 0)) > 0.01 OR ABS(d.cost - COALESCE(x.c, 0)) > 0.01 OR d.lines <> COALESCE(x.n, 0)`), [], 'item_daily = sale lines');
+    assert.deepEqual(sql(`SELECT s.business_id, s.entry_date FROM sales s WHERE s.status = 'completed' GROUP BY 1, 2
+      HAVING COUNT(*) <> COALESCE((SELECT count FROM sales_daily d WHERE d.business_id = s.business_id AND d.entry_date = s.entry_date), 0)`), [], 'sales_daily = sales');
+    assert.deepEqual(sql(`SELECT * FROM sales_daily d WHERE count <> (SELECT COUNT(*) FROM sales s WHERE s.business_id = d.business_id AND s.entry_date = d.entry_date AND s.status = 'completed')`), []);
     assert.deepEqual(sql(`SELECT p.id FROM products p WHERE p.kind <> 'fuel' AND ABS(p.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.product_id = p.id)) > 0.001`), []);
     assert.deepEqual(sql(`SELECT t.id FROM fuel_tanks t WHERE ABS(t.stock_qty - (SELECT COALESCE(SUM(qty),0) FROM stock_movements m WHERE m.tank_id = t.id)) > 0.001`), []);
     const inv = sql(`SELECT business_id, SUM(amount) v FROM journal_lines WHERE account = 'inventory' GROUP BY business_id`);
