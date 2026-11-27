@@ -4,10 +4,10 @@ import { PortalProvider, useAuth, type Perm, type PortalId } from './contexts/Au
 import { LoginPage } from './pages/LoginPage';
 import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
-import { SellPage } from './pages/SellPage';
 import { RestaurantPOS } from './pages/RestaurantPage';
 import { ProfitTrackingPage } from './pages/ProfitTracking';
 import { XisaabPage } from './pages/XisaabPage';
+import { StoreSalesPage } from './pages/StoreSalesPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
 import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
 import { OwnerOverview, OwnerReports } from './pages/OwnerPages';
@@ -118,8 +118,9 @@ function PortalPage() {
     xisaab: [['reports'], <XisaabPage />],
     settings: [['catalog'], <FuelSettings />],
   } : {
-    sell: [['sell'], <SellPage />],
-    sales: [['sell', 'reports'], <SalesPage />],
+    // Sales — the pharmacy's page: figures, filters, records and a New Sale window.
+    sales: [['sell', 'reports'], <StoreSalesPage />],
+    sell: [['sell'], <Navigate to="/store/sales" replace />],
     stock: [['stock', 'catalog'], <StockPage view="products" />],
     purchases: [['purchase'], <PurchasesPage />],
     expenses: [['expense'], <ExpensesPage />],

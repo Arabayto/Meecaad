@@ -9,6 +9,7 @@ import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
 import * as rest from '../../server/restaurant';
 import * as track from '../../server/tracking';
+import * as storeSales from '../../server/storeSales';
 import * as shifts from '../../server/shifts';
 import * as fuelShifts from '../../server/fuelShifts';
 import * as fuelItems from '../../server/fuelItems';
@@ -59,6 +60,8 @@ const routes: [string, string, Handler, Perm | ''][] = [
 
   ['GET', '/sales', ops.listSales, ''],
   ['POST', '/sales', ops.createSale, ''],
+  ['GET', '/sales/stats', storeSales.stats, ''],
+  ['GET', '/sales/records', storeSales.records, ''],
   ['GET', '/sales/:id', ops.getSale, ''],
   ['POST', '/sales/:id/void', ops.voidSale, ''],
   ['POST', '/sales/:id/return', ops.returnSale, ''],

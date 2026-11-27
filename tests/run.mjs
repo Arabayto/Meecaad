@@ -833,13 +833,20 @@ try {
       assert.equal(pt.daily.reduce((t, d) => t + d.profit, 0), pt.totals.profit, `${b}: days add up`);
       for (const i of pt.top) assert.equal(i.profit, i.revenue - i.cost, `${b}: item profit`);
       assert.equal(pt.hasCost, b !== 'restaurant');
+      assert.equal(pt.trend.length, 7, `${b}: a one-day period still shows a 7-day trend`);
+      assert.equal(pt.trend[6].date, today);
+      assert.equal(pt.trend[6].profit, pt.totals.profit, `${b}: today in the trend = today's profit`);
       const x = await owner.get(`/tracking/xisaab?business=${b}&date=${today}`);
       const cash = sql(`SELECT method_id, SUM(debit - credit) AS net FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'cash' GROUP BY method_id`);
       for (const m of x.methods) assert.equal(m.net, cash.find((c) => c.method_id === m.id)?.net ?? 0, `${b} ${m.id}: xisaab = money in the books`);
       assert.equal(x.totals.received - x.totals.paidOut, x.totals.net);
       assert.equal(x.methods.reduce((t, m) => t + m.in, 0), x.totals.received);
       assert.equal(x.transactions.reduce((t, r) => t + r.in - r.out, 0), x.totals.net, `${b}: transactions add up`);
-      assert.equal(x.transactions.filter((r) => r.kind === 'Sale').length, x.totals.salesCount);
+      assert.equal(x.transactions.filter((r) => r.kind === 'Sale').length - x.transactions.filter((r) => r.kind === 'Sale cancelled').length, x.totals.salesCount, `${b}: cancelled sales not counted`);
+      const payIn = sql(`SELECT COALESCE(-SUM(debit - credit), 0) AS v FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'receivable' AND entry_type IN ('customer_payment', 'customer_payment_void')`)[0].v;
+      assert.equal(x.totals.collected, payIn, `${b}: debts collected = customer payments only (a cancelled credit sale is not "collected")`);
+      const creditNet = sql(`SELECT COALESCE(SUM(debit - credit), 0) AS v FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'receivable' AND entry_type IN ('sale', 'fuel_sale', 'sale_void', 'fuel_sale_void', 'sale_return')`)[0].v;
+      assert.equal(x.totals.salesCredit, creditNet, `${b}: credit given net of cancellations and returns`);
       const sales = sql(`SELECT -COALESCE(SUM(debit - credit), 0) AS v FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'sales'`)[0].v;
       assert.equal(x.totals.sales, sales, `${b}: xisaab sales = the books`);
     }
@@ -849,10 +856,39 @@ try {
     const empty = await owner.get('/tracking/profit?business=store&from=2020-01-01&to=2020-01-31');
     assert.deepEqual([empty.totals.revenue, empty.totals.profit, empty.top.length, empty.previous.from], [0, 0, 0, '2019-12-01']);
     assert.equal((await owner.call('GET', '/tracking/profit?business=store&from=2026-02-10&to=2026-01-01')).status, 400, 'bad range');
+    assert.equal((await owner.call('GET', '/tracking/profit?business=store&from=2026-02-30&to=2026-03-01')).status, 400, 'no such day');
     // Sales tracking (store): profit per sale = sold for after returns − cost of the goods kept.
     const rows = await owner.get(`/sales?business=store&from=${today}&to=${today}`);
     assert.ok(rows.length > 0);
     for (const r of rows) assert.equal(r.profit, r.status === 'completed' ? r.total - r.returned_amount - r.cost_net : 0);
+    // Store sales page (pharmacy layout): figures, records with items, filters, search, pages.
+    const st = await owner.get('/sales/stats?business=store');
+    const allStore = await owner.get(`/sales?business=store&from=2000-01-01&to=${today}`);
+    const completedToday = allStore.filter((r) => r.status === 'completed' && r.entry_date === today);
+    assert.equal(st.total, allStore.filter((r) => r.status === 'completed').length, 'total sales = completed sales');
+    assert.equal(st.today, completedToday.length);
+    assert.equal(st.todayRevenue, completedToday.reduce((t, r) => t + r.total - r.returned_amount, 0));
+    assert.equal(st.products, (await owner.get('/products?business=store')).filter((p) => p.active && (!p.track_stock || p.stock_qty > 0)).length);
+    const rec = await owner.get('/sales/records?business=store');
+    assert.equal(rec.total, allStore.length, 'every sale listed, cancelled ones too');
+    assert.equal(rec.rows.length, Math.min(20, allStore.length));
+    assert.ok(rec.rows.every((r) => Array.isArray(r.items) && r.items.length > 0 && Array.isArray(r.methods)), 'rows carry their items and methods');
+    assert.ok(rec.rows.every((r, i) => i === 0 || `${rec.rows[i - 1].entry_date}${rec.rows[i - 1].created_at}` >= `${r.entry_date}${r.created_at}`), 'newest first');
+    const debts = await owner.get('/sales/records?business=store&debt=debt');
+    assert.ok(debts.rows.length > 0 && debts.rows.every((r) => r.credit_amount > 0 && r.status === 'completed'));
+    const cancelledRows = await owner.get('/sales/records?business=store&debt=cancelled');
+    assert.ok(cancelledRows.rows.every((r) => r.status === 'voided') && cancelledRows.rows.length === allStore.filter((r) => r.status === 'voided').length);
+    const zaadRows = await owner.get('/sales/records?business=store&method=zaad');
+    assert.ok(zaadRows.rows.length > 0 && zaadRows.rows.every((r) => r.methods.includes('zaad')));
+    const byItem = await owner.get('/sales/records?business=store&q=rice');
+    assert.ok(byItem.rows.length > 0 && byItem.rows.every((r) => r.items.some((i) => /rice/i.test(i.name)) || /rice/i.test(r.customer_name ?? '')));
+    const byNumber = await owner.get(`/sales/records?business=store&q=%23${allStore[0].number}`);
+    assert.ok(byNumber.rows.some((r) => r.number === allStore[0].number));
+    const dated = await owner.get(`/sales/records?business=store&from=${today}&to=${today}`);
+    assert.ok(dated.rows.every((r) => r.entry_date === today));
+    assert.equal((await owner.call('GET', '/sales/records?business=store&from=2026-13-40')).status, 400);
+    assert.equal((await owner.call('GET', '/sales/records?business=all')).status, 400, 'one business at a time');
+    assert.equal((await owner.get('/sales/records?business=restaurant')).rows.every((r) => r.items.length >= 0), true);
     // Who may see what.
     await owner.post('/users', { fullName: 'Track Till', username: 'tracktill', password: 'track-till-61', access: { store: 'cashier', restaurant: 'staff' } });
     const tt = client(); await tt.post('/auth/login', { username: 'tracktill', password: 'track-till-61' });
@@ -860,6 +896,8 @@ try {
     assert.equal((await tt.call('GET', `/tracking/profit?business=store&from=${today}&to=${today}`)).status, 403, 'but not the profit');
     assert.equal((await tt.call('GET', `/tracking/xisaab?business=restaurant&date=${today}`)).status, 403, 'restaurant staff: no xisaab');
     assert.equal((await tt.call('GET', `/tracking/xisaab?business=fuel&date=${today}`)).status, 403, 'no access to the fuel station');
+    assert.equal((await tt.call('GET', '/sales/records?business=fuel')).status, 403, 'store cashier: not the fuel station sales');
+    assert.equal((await tt.call('GET', '/sales/records?business=store')).status, 200, 'store cashier sees the store sales');
     const tillRows = await tt.get(`/sales?business=store&from=${today}&to=${today}`);
     assert.ok(tillRows.length && tillRows.every((r) => r.profit === undefined && r.cost_net === undefined && r.cost_total === undefined), 'cashiers do not see cost or profit');
   });

@@ -107,7 +107,7 @@ export function SalesPage({ embedded = false, refreshKey = 0 }: { embedded?: boo
   );
 }
 
-function ReturnModal({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: () => void }) {
+export function ReturnModal({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: () => void }) {
   const { activeMethods } = useAuth();
   const [qtys, setQtys] = useState<Record<string, string>>({});
   const [method, setMethod] = useState(sale.payments[0]?.method_id ?? (sale.customer_id ? '' : 'cash'));

@@ -28,8 +28,7 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
   ],
   store: [
     { label: 'Dashboard', path: '/', icon: Home, perms: ['reports'] },
-    { label: 'Point of Sale', path: '/sell', icon: ShoppingCart, perms: ['sell'] },
-    { label: 'Sales & Returns', path: '/sales', icon: Receipt, perms: ['sell', 'reports'] },
+    { label: 'Sales', path: '/sales', icon: ShoppingCart, perms: ['sell', 'reports'] },   // records + New Sale window (like the pharmacy)
     { label: 'Products & Stock', path: '/stock', icon: PackageSearch, perms: ['stock', 'catalog'] },
     { label: 'Purchases', path: '/purchases', icon: Truck, perms: ['purchase'] },
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
