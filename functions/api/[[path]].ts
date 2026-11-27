@@ -8,6 +8,7 @@ import * as fuel from '../../server/fuel';
 import * as ops from '../../server/ops';
 import * as rep from '../../server/reports';
 import * as rest from '../../server/restaurant';
+import * as track from '../../server/tracking';
 import * as shifts from '../../server/shifts';
 import * as fuelShifts from '../../server/fuelShifts';
 import * as fuelItems from '../../server/fuelItems';
@@ -128,6 +129,8 @@ const routes: [string, string, Handler, Perm | ''][] = [
   ['POST', '/period-locks', shifts.lockPeriod, ''],
   ['POST', '/period-locks/:id/unlock', shifts.unlockPeriod, ''],
   ['GET', '/reports/business', rep.businessReport, ''],
+  ['GET', '/tracking/profit', track.profit, ''],
+  ['GET', '/tracking/xisaab', track.xisaab, ''],
   ['GET', '/closing/preview', rep.closingPreview, 'close'],
   ['GET', '/closing', rep.listClosings, ''],
   ['POST', '/closing', rep.createClosing, 'close'],

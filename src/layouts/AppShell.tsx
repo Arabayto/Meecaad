@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   BarChart3, BookOpen, ClipboardCheck, Coffee, FileClock, Fuel, Gauge, Home, LogOut, Menu, PackageSearch, Receipt,
-  Settings, ShoppingBag, ShoppingCart, Store, Truck, UserCheck, Users, Wallet, X,
+  Settings, ShoppingBag, ShoppingCart, Store, TrendingUp, Truck, UserCheck, Users, Wallet, X, Calculator,
 } from 'lucide-react';
 import { useAuth, PORTALS, ROLE_LABELS, type Perm, type PortalId } from '../contexts/AuthContext';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -21,6 +21,8 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },
     { label: 'Closings', path: '/closings', icon: ClipboardCheck, perms: ['reports'] },
+    { label: 'Xisaab Xidh', path: '/xisaab', icon: Calculator, perms: ['reports'] },
+    { label: 'Profit Tracking', path: '/profit', icon: TrendingUp, perms: ['reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
     { label: 'Users & Roles', path: '/users', icon: BookOpen, perms: ['users'] },   // owner only
   ],
@@ -33,7 +35,9 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Customers & Debts', path: '/customers', icon: UserCheck, perms: ['sell', 'reports'] },
     { label: 'Suppliers', path: '/suppliers', icon: Users, perms: ['purchase'] },
+    { label: 'Xisaab Xidh', path: '/xisaab', icon: Calculator, perms: ['reports', 'close'] },
     { label: 'Daily Closing', path: '/closing', icon: ClipboardCheck, perms: ['close'] },
+    { label: 'Profit Tracking', path: '/profit', icon: TrendingUp, perms: ['reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
   ],
   // The fuel station: open a shift, record sales, xisaab xidh; shifts, debts, reports, rate.
@@ -45,6 +49,8 @@ export const PORTAL_NAV: Record<PortalId, NavItem[]> = {
     { label: 'Expenses', path: '/expenses', icon: ShoppingBag, perms: ['expense'] },
     { label: 'Credit Customers', path: '/customers', icon: UserCheck, perms: ['fuel', 'reports'] },
     { label: 'Suppliers', path: '/suppliers', icon: Truck, perms: ['purchase', 'stock'] },
+    { label: 'Xisaab Xidh', path: '/xisaab', icon: Calculator, perms: ['reports'] },
+    { label: 'Profit Tracking', path: '/profit', icon: TrendingUp, perms: ['reports'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, perms: ['reports'] },
     { label: 'Users & Roles', path: '/users', icon: BookOpen, perms: ['users'] },   // owner only
     { label: 'Settings', path: '/settings', icon: Settings, perms: ['catalog'] },

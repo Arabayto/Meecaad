@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { SaleReceipt } from '../components/Receipt';
-import { DateRange, ErrorBox, Field, Money, PageHeader, ReasonModal, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
+import { DateRange, ErrorBox, Field, Money, PageHeader, ReasonModal, Stat, addDays, fmtTime, useFilters, useLoad, useSubmit } from '../components/ui';
 
 /**
  * Sales history. On its own page, or `embedded` under the store's point of sale
@@ -36,7 +36,10 @@ export function SalesPage({ embedded = false, refreshKey = 0 }: { embedded?: boo
     credit: completed.reduce((s: number, r: any) => s + r.credit_amount, 0),
   };
 
-  const summary = `${totals.count} sales · ${money(totals.sales)} after returns · ${money(totals.credit)} given on credit`;
+  // Sales tracking (store only, for those who see reports): profit of each sale and of the period shown.
+  const tracking = business === 'store' && can('reports');
+  const profit = completed.reduce((s: number, r: any) => s + (r.profit ?? 0), 0);
+  const summary = `${totals.count} sales · ${money(totals.sales)} after returns · ${money(totals.credit)} given on credit${tracking ? ` · ${money(profit)} profit` : ''}`;
   return (
     <div className={embedded ? 'form-stack' : 'module-page'}>
       {!embedded && <PageHeader icon={<Receipt size={22} />} title={`Sales history — ${businessName(business)}`} subtitle={summary} />}
@@ -47,10 +50,19 @@ export function SalesPage({ embedded = false, refreshKey = 0 }: { embedded?: boo
           <input className="form-input" style={{ maxWidth: 260 }} placeholder="Search receipt #, item, customer" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <ErrorBox error={sales.error} />
+        {tracking && (
+          <div className="kpi-grid" style={{ marginBottom: 12 }}>
+            <Stat label="Sales" value={money(totals.sales)} sub={`${totals.count} sales${totals.count ? ` · average ${money(Math.round(totals.sales / totals.count))}` : ''}`} />
+            <Stat label="Profit on these sales" value={money(profit)} tone={profit < 0 ? 'red' : undefined} sub={totals.sales ? `margin ${Math.round((profit / totals.sales) * 1000) / 10}% · before expenses` : 'before expenses'} />
+            <Stat label="Paid now" value={money(completed.reduce((s: number, r: any) => s + r.paid_amount, 0))} sub={`${money(totals.credit)} on credit`} />
+            <Stat label="Returned / cancelled" value={money(completed.reduce((s: number, r: any) => s + r.returned_amount, 0) + rows.filter((r: any) => r.status === 'voided').reduce((s: number, r: any) => s + r.total, 0))}
+              sub={`${rows.filter((r: any) => r.status === 'voided').length} cancelled · ${completed.filter((r: any) => r.returned_amount > 0).length} with returns`} />
+          </div>
+        )}
         {filter.bar}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Time</th><th>Customer</th><th className="num">Total</th><th>Paid with</th><th className="num">On credit</th><th>Status</th><th>Sold by</th></tr></thead>
+            <thead><tr><th>#</th><th>Time</th><th>Customer</th><th className="num">Total</th><th>Paid with</th><th className="num">On credit</th>{tracking && <th className="num">Profit</th>}<th>Status</th><th>Sold by</th></tr></thead>
             <tbody>
               {rows.map((s: any) => (
                 <tr key={s.id} className="tr--clickable" onClick={() => show(s.id)}>
@@ -60,11 +72,12 @@ export function SalesPage({ embedded = false, refreshKey = 0 }: { embedded?: boo
                   <td className="num"><Money c={s.total} />{s.returned_amount > 0 && <div className="small muted">−{money(s.returned_amount)} returned</div>}</td>
                   <td className="small">{s.payments_text ?? '—'}</td>
                   <td className="num">{s.credit_amount ? money(s.credit_amount) : '—'}</td>
+                  {tracking && <td className="num">{s.status === 'completed' ? <span style={{ color: s.profit < 0 ? '#b91c1c' : '#15803d' }}>{money(s.profit)}</span> : '—'}</td>}
                   <td>{s.status === 'voided' ? <StatusBadge label="Cancelled" tone="red" /> : s.returned_amount > 0 ? <StatusBadge label="Part returned" tone="yellow" /> : <StatusBadge label="Completed" tone="green" />}</td>
                   <td className="small"><strong>{s.created_by_name}</strong></td>
                 </tr>
               ))}
-              {!sales.loading && !rows.length && <tr><td colSpan={8} className="muted">No sales in this period.</td></tr>}
+              {!sales.loading && !rows.length && <tr><td colSpan={tracking ? 9 : 8} className="muted">No sales in this period.</td></tr>}
             </tbody>
           </table>
         </div>

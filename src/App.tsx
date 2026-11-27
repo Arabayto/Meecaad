@@ -6,6 +6,8 @@ import { PortalChooser } from './pages/PortalChooser';
 import { DashboardPage } from './pages/DashboardPage';
 import { SellPage } from './pages/SellPage';
 import { RestaurantPOS } from './pages/RestaurantPage';
+import { ProfitTrackingPage } from './pages/ProfitTracking';
+import { XisaabPage } from './pages/XisaabPage';
 import { RestaurantDashboard, RestaurantReports } from './pages/RestaurantReports';
 import { ClosingsPage, ShiftPage } from './pages/ShiftPage';
 import { OwnerOverview, OwnerReports } from './pages/OwnerPages';
@@ -97,6 +99,8 @@ function PortalPage() {
     expenses: [['expense'], <ExpensesPage />],
     customers: [['sell', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <RestaurantReports />],
+    profit: [['reports'], <ProfitTrackingPage />],
+    xisaab: [['reports'], <XisaabPage />],
     shift: [['sell'], <ShiftPage />],
     users: [['users'], <UsersPage />],
     closings: [['reports'], <ClosingsPage />],
@@ -110,6 +114,8 @@ function PortalPage() {
     expenses: [['expense'], <ExpensesPage />],
     customers: [['fuel', 'reports'], <PartiesPage kind="customers" />],
     reports: [['reports'], <FuelReports />],
+    profit: [['reports'], <ProfitTrackingPage />],
+    xisaab: [['reports'], <XisaabPage />],
     settings: [['catalog'], <FuelSettings />],
   } : {
     sell: [['sell'], <SellPage />],
@@ -121,6 +127,8 @@ function PortalPage() {
     suppliers: [['purchase'], <PartiesPage kind="suppliers" />],
     closing: [['close'], <ClosingPage />],
     reports: [['reports'], <StoreReports />],
+    profit: [['reports'], <ProfitTrackingPage />],
+    xisaab: [['reports', 'close'], <XisaabPage />],
   } as Record<string, [Perm[], JSX.Element]>;
   const entry = pages[page ?? ''];
   if (!entry) return <Navigate to={`/${p}`} replace />;

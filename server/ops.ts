@@ -3,7 +3,7 @@
 // balanced journal entry and its audit row are saved together or not at all.
 
 import {
-  HttpError, Tx, all, assertDayOpen, bad, bizScope, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, placeholders,
+  HttpError, Tx, all, assertDayOpen, bad, bizScope, can, cents, entryDate, first, idemKey, newId, nowIso, paymentMethod, placeholders,
   partyIn, qty, requireBiz, round3, str, today, type Ctx, type Line,
 } from './lib';
 import { assertShiftCurrent } from './shifts';
@@ -101,14 +101,21 @@ export async function listSales(ctx: Ctx) {
   const { from, to } = dateRange(ctx);
   const q = ctx.url.searchParams.get('q');
   const number = Number(q);
-  return all(ctx.db,
+  const rows = await all<any>(ctx.db,
     `SELECT s.*, c.name AS customer_name, u.full_name AS created_by_name,
+            (SELECT COALESCE(SUM(ROUND((si.qty - si.returned_qty) * si.unit_cost)), 0) FROM sale_items si WHERE si.sale_id = s.id) AS cost_net,
             (SELECT GROUP_CONCAT(pm.name || ' ' || printf('%.2f', sp.amount / 100.0), ', ') FROM sale_payments sp JOIN payment_methods pm ON pm.id = sp.method_id WHERE sp.sale_id = s.id) AS payments_text
      FROM sales s LEFT JOIN customers c ON c.id = s.customer_id JOIN users u ON u.id = s.created_by
      WHERE s.business_id IN (${placeholders(scope)}) AND s.entry_date BETWEEN ? AND ?
        ${q ? `AND (c.name LIKE ? OR s.number = ? OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.name LIKE ?))` : ''}
      ORDER BY s.created_at DESC LIMIT 500`,
     ...scope, from, to, ...(q ? [`%${q}%`, Number.isInteger(number) ? number : -1, `%${q}%`] : []));
+  // Profit per sale (what it sold for after returns, minus what the goods cost) — only for those who see reports.
+  for (const r of rows) {
+    if (can(ctx.user, 'reports', r.business_id)) r.profit = r.status === 'completed' ? r.total - r.returned_amount - r.cost_net : 0;
+    else { delete r.cost_net; delete r.cost_total; }
+  }
+  return rows;
 }
 
 export async function getSale(ctx: Ctx) {

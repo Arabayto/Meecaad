@@ -296,3 +296,19 @@
 .bulk-preview { max-height: 320px; overflow: auto; }
 .bulk-row--bad td { background: #fef2f2; }
 .bulk-row--saved td { color: var(--text-muted); }
+
+/* Xisaab Xidhka Maanta */
+.xisaab-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.xisaab-filters .form-select { width: auto; min-width: 180px; }
+.xisaab-methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.xisaab-method { display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); cursor: pointer; transition: border-color var(--transition); }
+.xisaab-method:hover { border-color: var(--primary); }
+.xisaab-method.active { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); background: var(--primary-lighter); }
+.xisaab-method__name { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.xisaab-method strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.xisaab-memo { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .xisaab-filters .form-select { flex: 1 1 100%; } }
+.xisaab-day { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.xisaab-day .form-input { width: auto; }
+.xisaab-head { flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) { .xisaab-day { flex: 1 1 100%; } .xisaab-day .form-input { flex: 1; } .xisaab-head .btn { width: 100%; } }

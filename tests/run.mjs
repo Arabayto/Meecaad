@@ -823,6 +823,47 @@ try {
     assert.equal((await fm.call('POST', '/expense-categories', { business: 'store', name: 'Hack' })).status, 403, 'a fuel manager does not manage the store list');
   });
 
+  await step('profit tracking and xisaab xidh: each business separate, matching the books; sales tracking in the store', async () => {
+    const summary = await owner.get(`/reports/summary?business=all&from=${today}&to=${today}`);
+    for (const b of ['store', 'restaurant', 'fuel']) {
+      const pt = await owner.get(`/tracking/profit?business=${b}&from=${today}&to=${today}`);
+      const ref = summary.profit[b];
+      assert.deepEqual([pt.totals.revenue, pt.totals.cogs, pt.totals.expenses, pt.totals.losses, pt.totals.cashDiff, pt.totals.profit],
+        [ref.revenue, ref.cogs, ref.expenses, ref.losses, ref.cashDiff, ref.profit], `${b}: profit tracking = the books, this business only`);
+      assert.equal(pt.daily.reduce((t, d) => t + d.profit, 0), pt.totals.profit, `${b}: days add up`);
+      for (const i of pt.top) assert.equal(i.profit, i.revenue - i.cost, `${b}: item profit`);
+      assert.equal(pt.hasCost, b !== 'restaurant');
+      const x = await owner.get(`/tracking/xisaab?business=${b}&date=${today}`);
+      const cash = sql(`SELECT method_id, SUM(debit - credit) AS net FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'cash' GROUP BY method_id`);
+      for (const m of x.methods) assert.equal(m.net, cash.find((c) => c.method_id === m.id)?.net ?? 0, `${b} ${m.id}: xisaab = money in the books`);
+      assert.equal(x.totals.received - x.totals.paidOut, x.totals.net);
+      assert.equal(x.methods.reduce((t, m) => t + m.in, 0), x.totals.received);
+      assert.equal(x.transactions.reduce((t, r) => t + r.in - r.out, 0), x.totals.net, `${b}: transactions add up`);
+      assert.equal(x.transactions.filter((r) => r.kind === 'Sale').length, x.totals.salesCount);
+      const sales = sql(`SELECT -COALESCE(SUM(debit - credit), 0) AS v FROM daily_totals WHERE business_id = '${b}' AND entry_date = '${today}' AND account = 'sales'`)[0].v;
+      assert.equal(x.totals.sales, sales, `${b}: xisaab sales = the books`);
+    }
+    const storeCount = (await owner.get(`/sales?business=store&from=${today}&to=${today}`)).filter((r) => r.status === 'completed').length;
+    assert.equal((await owner.get(`/tracking/profit?business=store&from=${today}&to=${today}`)).totals.sales, storeCount);
+    // A period with nothing in it.
+    const empty = await owner.get('/tracking/profit?business=store&from=2020-01-01&to=2020-01-31');
+    assert.deepEqual([empty.totals.revenue, empty.totals.profit, empty.top.length, empty.previous.from], [0, 0, 0, '2019-12-01']);
+    assert.equal((await owner.call('GET', '/tracking/profit?business=store&from=2026-02-10&to=2026-01-01')).status, 400, 'bad range');
+    // Sales tracking (store): profit per sale = sold for after returns − cost of the goods kept.
+    const rows = await owner.get(`/sales?business=store&from=${today}&to=${today}`);
+    assert.ok(rows.length > 0);
+    for (const r of rows) assert.equal(r.profit, r.status === 'completed' ? r.total - r.returned_amount - r.cost_net : 0);
+    // Who may see what.
+    await owner.post('/users', { fullName: 'Track Till', username: 'tracktill', password: 'track-till-61', access: { store: 'cashier', restaurant: 'staff' } });
+    const tt = client(); await tt.post('/auth/login', { username: 'tracktill', password: 'track-till-61' });
+    assert.equal((await tt.call('GET', `/tracking/xisaab?business=store&date=${today}`)).status, 200, 'store cashier closes the day, so sees its xisaab');
+    assert.equal((await tt.call('GET', `/tracking/profit?business=store&from=${today}&to=${today}`)).status, 403, 'but not the profit');
+    assert.equal((await tt.call('GET', `/tracking/xisaab?business=restaurant&date=${today}`)).status, 403, 'restaurant staff: no xisaab');
+    assert.equal((await tt.call('GET', `/tracking/xisaab?business=fuel&date=${today}`)).status, 403, 'no access to the fuel station');
+    const tillRows = await tt.get(`/sales?business=store&from=${today}&to=${today}`);
+    assert.ok(tillRows.length && tillRows.every((r) => r.profit === undefined && r.cost_net === undefined && r.cost_total === undefined), 'cashiers do not see cost or profit');
+  });
+
   await step('store CRUD: delete and restore products, customers and suppliers safely; bulk upload products', async () => {
     const storePnl = async () => (await owner.get(`/reports/summary?business=store&from=${today}&to=${today}`)).profit.store;
     const stockValue = async () => (await owner.get('/products?business=store')).reduce((t, p) => t + (p.track_stock ? p.stock_value : 0), 0);
