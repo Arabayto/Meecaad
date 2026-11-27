@@ -143,7 +143,7 @@ async function main() {
     'Profit tracking (fuel, month)': [`/tracking/profit?business=fuel&from=${month}&to=${today}`],
     'Xisaab xidh (store, today)': [`/tracking/xisaab?business=store&date=${today}`],
     'Store sales page (first page)': ['/sales/stats?business=store', '/sales/records?business=store'],
-    'Store sales page (search, page 3)': ['/sales/records?business=store&q=a&page=3'],
+    'Store sales page (search, page 3)': ['/sales/records?business=store&q=Item%2012&page=3'],
     'Xisaab xidh (fuel, today)': [`/tracking/xisaab?business=fuel&date=${today}`],
     'All transactions (7 days)': [`/reports/ledger?business=all&from=${dayStr(today, 6)}&to=${today}`],
     'Audit log (7 days)': [`/audit?from=${dayStr(today, 6)}&to=${today}`],

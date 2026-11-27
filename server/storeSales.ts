@@ -1,7 +1,7 @@
 // Store sales page (same layout as the pharmacy's): the four figures at the top and the
 // sales records, newest first, one page at a time, with search and filters.
 
-import { HttpError, all, bad, bizScope, first, placeholders, today, type Ctx } from './lib';
+import { all, bad, bizScope, first, placeholders, today, type Ctx } from './lib';
 
 const PAGE = 20;
 /** A real calendar day written YYYY-MM-DD (2026-13-40 is not). */
@@ -63,7 +63,6 @@ export async function records(ctx: Ctx) {
       WHERE ${sqlWhere} ORDER BY s.entry_date DESC, s.created_at DESC LIMIT ? OFFSET ?`, ...args, PAGE, (page - 1) * PAGE),
     first<{ n: number }>(ctx.db, `SELECT COUNT(*) AS n FROM (SELECT 1 FROM sales s LEFT JOIN customers c ON c.id = s.customer_id WHERE ${sqlWhere} LIMIT ${COUNT_CAP + 1})`, ...args),
   ]);
-  if (!rows.length && page > 1 && !(counted?.n)) throw new HttpError(404, 'No such page');
   const items = rows.length ? await all<any>(ctx.db, `SELECT id, sale_id, product_id, name, qty, returned_qty, unit_price, line_total FROM sale_items
       WHERE sale_id IN (${placeholders(rows)}) ORDER BY rowid`, ...rows.map((r) => r.id)) : [];
   for (const r of rows) {
