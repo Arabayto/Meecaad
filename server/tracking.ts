@@ -18,18 +18,30 @@ function range(ctx: Ctx) {
   return { from, to, span, pFrom: addDays(from, -span), pTo: addDays(from, -1) };
 }
 
+/**
+ * One read of the daily totals for a period gives the days, the totals, expenses by kind and losses
+ * (the table is keyed by business and date, so each extra query would read the same rows again).
+ */
 async function days(db: D1Database, business: string, from: string, to: string) {
-  const rows = await all<{ entry_date: string; account: string; total: number }>(db,
-    `SELECT entry_date, account, SUM(debit - credit) AS total FROM daily_totals
-     WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL)}) GROUP BY entry_date, account`, business, from, to, ...PNL);
+  const rows = await all<{ entry_date: string; account: string; category: string; total: number }>(db,
+    `SELECT entry_date, account, category, SUM(debit - credit) AS total FROM daily_totals
+     WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN (${placeholders(PNL)}) GROUP BY entry_date, account, category`, business, from, to, ...PNL);
   const map = new Map<string, Day>();
+  const expenses = new Map<string, number>();
+  const losses = new Map<string, { account: string; category: string; total: number }>();
   for (const r of rows) {
     const d = map.get(r.entry_date) ?? { date: r.entry_date, revenue: 0, cogs: 0, expenses: 0, losses: 0, cashDiff: 0, profit: 0 };
     if (r.account === 'sales') d.revenue -= r.total;
     if (r.account === 'cogs') d.cogs += r.total;
-    if (r.account === 'expense') d.expenses += r.total;
+    if (r.account === 'expense') { d.expenses += r.total; expenses.set(r.category, (expenses.get(r.category) ?? 0) + r.total); }
     if (r.account === 'stock_loss') d.losses += r.total;
     if (r.account === 'cash_diff') d.cashDiff += r.total;
+    if (r.account === 'stock_loss' || r.account === 'cash_diff') {
+      const key = `${r.account}|${r.category || r.account}`;
+      const l = losses.get(key) ?? { account: r.account, category: r.category || r.account, total: 0 };
+      l.total += r.total;
+      losses.set(key, l);
+    }
     map.set(r.entry_date, d);
   }
   const list = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -37,7 +49,11 @@ async function days(db: D1Database, business: string, from: string, to: string) 
   const total = list.reduce((t, d) => ({
     revenue: t.revenue + d.revenue, cogs: t.cogs + d.cogs, expenses: t.expenses + d.expenses, losses: t.losses + d.losses, cashDiff: t.cashDiff + d.cashDiff, profit: t.profit + d.profit,
   }), { revenue: 0, cogs: 0, expenses: 0, losses: 0, cashDiff: 0, profit: 0 });
-  return { list, total };
+  return {
+    list, total,
+    expenses: [...expenses].filter(([, v]) => v !== 0).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total),
+    losses: [...losses.values()].filter((l) => l.total !== 0).sort((a, b) => b.total - a.total),
+  };
 }
 
 /** Number of sales (cancelled ones not counted). */
@@ -67,14 +83,10 @@ function items(db: D1Database, business: string, from: string, to: string) {
 export async function profit(ctx: Ctx) {
   const business = requireBiz(ctx, ctx.url.searchParams.get('business'), 'reports');
   const { from, to, pFrom, pTo } = range(ctx);
-  const [cur, prev, count, prevCount, itemRows, expenses, losses] = await Promise.all([
+  const [cur, prev, count, prevCount, itemRows] = await Promise.all([
     days(ctx.db, business, from, to), days(ctx.db, business, pFrom, pTo),
     saleCount(ctx.db, business, from, to), saleCount(ctx.db, business, pFrom, pTo),
     items(ctx.db, business, from, to),
-    all<any>(ctx.db, `SELECT category, SUM(debit - credit) AS total FROM daily_totals WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account = 'expense'
-      GROUP BY category HAVING SUM(debit - credit) <> 0 ORDER BY total DESC`, business, from, to),
-    all<any>(ctx.db, `SELECT account, COALESCE(NULLIF(category, ''), account) AS category, SUM(debit - credit) AS total FROM daily_totals
-      WHERE business_id = ? AND entry_date BETWEEN ? AND ? AND account IN ('stock_loss', 'cash_diff') GROUP BY account, 2 HAVING SUM(debit - credit) <> 0 ORDER BY total DESC`, business, from, to),
   ]);
   const list = itemRows.filter((i) => i.revenue || i.qty).map((i) => ({ ...i, profit: i.revenue - i.cost, margin: i.revenue ? Math.round(((i.revenue - i.cost) / i.revenue) * 1000) / 10 : 0 }));
   const t = cur.total;
@@ -86,7 +98,7 @@ export async function profit(ctx: Ctx) {
     hasCost: business !== 'restaurant',
     top: [...list].sort((a, b) => (business === 'restaurant' ? b.revenue - a.revenue : b.profit - a.profit)).slice(0, 15),
     weakest: business === 'restaurant' ? [] : [...list].filter((i) => i.revenue > 0).sort((a, b) => a.margin - b.margin).slice(0, 5),
-    daily: cur.list, expenses, losses,
+    daily: cur.list, expenses: cur.expenses, losses: cur.losses,
   };
 }
 
