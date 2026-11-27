@@ -47,10 +47,25 @@ export async function records(ctx: Ctx) {
   if (debt === 'paid') where.push("s.credit_amount = 0 AND s.status = 'completed'");
   if (debt === 'cancelled') where.push("s.status = 'voided'");
   const q = (p.get('q') ?? '').trim();
+  let salesFrom = 'sales s';
+  const fromArgs: unknown[] = [];
   if (q) {
+    // Search without reading every sale: a sale number goes straight to that sale; otherwise find the
+    // matching customers and products first (small lists), then only their sales through the indexes.
     const n = Number(q.replace(/^#/, ''));
-    where.push(`(c.name LIKE ? OR c.phone LIKE ? OR s.number = ? OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.name LIKE ?))`);
-    args.push(`%${q}%`, `%${q}%`, Number.isInteger(n) ? n : -1, `%${q}%`);
+    const [custs, prods] = await Promise.all([
+      all<{ id: string }>(ctx.db, `SELECT c.id FROM customers c JOIN customer_businesses l ON l.customer_id = c.id AND l.business_id = ?
+        WHERE c.name LIKE ? OR c.phone LIKE ? LIMIT 200`, business, `%${q}%`, `%${q}%`),
+      all<{ id: string }>(ctx.db, `SELECT id FROM products WHERE business_id = ? AND name LIKE ? LIMIT 200`, business, `%${q}%`),
+    ]);
+    // The matching sale ids, each part through its own index; the sales are then read by id only
+    // (CROSS JOIN keeps that order, so the store's other sales are never read).
+    const parts: string[] = [];
+    if (Number.isInteger(n) && n > 0) { parts.push('SELECT id FROM sales WHERE business_id = ? AND number = ?'); fromArgs.push(business, n); }
+    if (custs.length) { parts.push(`SELECT id FROM sales WHERE customer_id IN (${placeholders(custs)})`); fromArgs.push(...custs.map((c) => c.id)); }
+    if (prods.length) { parts.push(`SELECT sale_id FROM sale_items WHERE product_id IN (${placeholders(prods)})`); fromArgs.push(...prods.map((x) => x.id)); }
+    if (!parts.length) where.push('0');
+    else salesFrom = `(${parts.join(' UNION ')}) m CROSS JOIN sales s ON s.id = m.id`;
   }
   const sqlWhere = where.join(' AND ');
   const [rows, counted] = await Promise.all([
@@ -58,10 +73,10 @@ export async function records(ctx: Ctx) {
         c.name AS customer_name, c.phone AS customer_phone, u.full_name AS created_by_name, CASE WHEN u.role = 'owner' THEN 'owner' ELSE ub.role END AS created_by_role,
         (SELECT GROUP_CONCAT(pm.name || ' ' || printf('%.2f', sp.amount / 100.0), ', ') FROM sale_payments sp JOIN payment_methods pm ON pm.id = sp.method_id WHERE sp.sale_id = s.id) AS payments_text,
         (SELECT GROUP_CONCAT(DISTINCT sp.method_id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods
-      FROM sales s LEFT JOIN customers c ON c.id = s.customer_id JOIN users u ON u.id = s.created_by
+      FROM ${salesFrom} LEFT JOIN customers c ON c.id = s.customer_id JOIN users u ON u.id = s.created_by
       LEFT JOIN user_businesses ub ON ub.user_id = s.created_by AND ub.business_id = s.business_id
-      WHERE ${sqlWhere} ORDER BY s.entry_date DESC, s.created_at DESC LIMIT ? OFFSET ?`, ...args, PAGE, (page - 1) * PAGE),
-    first<{ n: number }>(ctx.db, `SELECT COUNT(*) AS n FROM (SELECT 1 FROM sales s LEFT JOIN customers c ON c.id = s.customer_id WHERE ${sqlWhere} LIMIT ${COUNT_CAP + 1})`, ...args),
+      WHERE ${sqlWhere} ORDER BY s.entry_date DESC, s.created_at DESC LIMIT ? OFFSET ?`, ...fromArgs, ...args, PAGE, (page - 1) * PAGE),
+    first<{ n: number }>(ctx.db, `SELECT COUNT(*) AS n FROM (SELECT 1 FROM ${salesFrom} WHERE ${sqlWhere} LIMIT ${COUNT_CAP + 1})`, ...fromArgs, ...args),
   ]);
   const items = rows.length ? await all<any>(ctx.db, `SELECT id, sale_id, product_id, name, qty, returned_qty, unit_price, line_total FROM sale_items
       WHERE sale_id IN (${placeholders(rows)}) ORDER BY rowid`, ...rows.map((r) => r.id)) : [];
