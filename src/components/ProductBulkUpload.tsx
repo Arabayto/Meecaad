@@ -4,9 +4,10 @@ import { money, num, post, toCents } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Modal } from './Modal';
+import { readXlsx } from './xlsx';
 
 /**
- * Store products from a file or from rows copied out of Excel / Google Sheets:
+ * Store products from an Excel (.xlsx) or CSV file, or from rows copied out of Excel / Google Sheets:
  * name, cost price, selling price, quantity in stock (category optional).
  * Every row is checked on screen first; only the good rows are saved, in parts of 10
  * (each part all-or-nothing and safe to retry).
@@ -105,10 +106,29 @@ export function ProductBulkUpload({ existing, onClose, onSaved }: { existing: st
   };
   const pick = async (file?: File) => {
     if (!file) return;
-    if (/\.(xlsx?|ods)$/i.test(file.name)) { addToast('error', 'Save the sheet as CSV first (File → Save as → CSV), or copy the rows and paste them here.', 6000); return; }
-    if (file.size > 2_000_000) { addToast('error', 'The file is too big (2 MB at most).', 4000); return; }
+    if (/\.(xls|ods|numbers)$/i.test(file.name)) {
+      addToast('error', 'This is an older spreadsheet format. Open it and save it as Excel (.xlsx) or CSV, then choose it again.', 7000); return;
+    }
+    const excel = /\.(xlsx|xlsm)$/i.test(file.name);
+    if (file.size > (excel ? 5_000_000 : 2_000_000)) { addToast('error', `The file is too big (${excel ? 5 : 2} MB at most).`, 4000); return; }
+    let content: string;
+    if (excel) {
+      try {
+        const sheet = await readXlsx(file);
+        // A title line above the table ("Products — March") is skipped.
+        const width = Math.max(0, ...sheet.map((r) => r.filter(Boolean).length));
+        while (sheet.length > 1 && width > 1 && sheet[0].filter(Boolean).length === 1) sheet.shift();
+        // Shown in the box as rows (tab between columns), so it can still be corrected before adding.
+        content = sheet.map((r) => r.map((c) => {
+          const v = c.replace(/[\t\r\n]+/g, ' ');
+          return v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v;
+        }).join('\t')).join('\n');
+      } catch (e: any) {
+        addToast('error', e.message || 'Could not read this Excel file.', 6000); return;
+      }
+    } else content = await file.text();
     setFileName(file.name); setSavedRows(new Set()); setFailed('');
-    setText(await file.text());
+    setText(content);
   };
   const upload = async () => {
     setSaving(true); setFailed('');
@@ -147,12 +167,12 @@ export function ProductBulkUpload({ existing, onClose, onSaved }: { existing: st
       <div className="form-stack">
         <div className="bulk-steps">
           <div><strong>1.</strong> Columns: <strong>name, cost price, selling price, quantity</strong> (category optional). <button type="button" className="btn btn-ghost btn-xs" onClick={download}><Download size={13} /> Download template</button></div>
-          <div><strong>2.</strong> Choose the CSV file, or copy the rows from Excel / Google Sheets and paste them below.</div>
+          <div><strong>2.</strong> Choose the Excel (.xlsx) or CSV file — or copy the rows from Excel / Google Sheets and paste them below.</div>
         </div>
         <div className="row">
           <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
             <Upload size={14} /> Choose file
-            <input type="file" accept=".csv,.txt,.tsv,text/csv,text/plain" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
+            <input type="file" accept=".xlsx,.xlsm,.csv,.txt,.tsv,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
           {fileName && <span className="small muted">{fileName}</span>}
         </div>
