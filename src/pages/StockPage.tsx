@@ -60,7 +60,7 @@ export function StockPage({ view }: { view: CatalogView }) {
   const deletedRows = (deleted.data ?? []).filter((p: any) => p.kind === kind);
   const { run: runRestore, busy: restoring } = useSubmit();
   const restore = async (p: any) => {
-    if (await runRestore(() => post(`/products/${p.id}/restore`, {}), `${p.name} is back`)) { deleted.reload(); products.reload(); }
+    if (await runRestore(() => post(`/products/${p.id}/restore`, {}), `${p.name.replace(/ \(deleted [0-9a-f]{6}\)$/, "")} is back`)) { deleted.reload(); products.reload(); }
   };
   const deletedList = (
     <div className="table-wrap">
@@ -69,7 +69,7 @@ export function StockPage({ view }: { view: CatalogView }) {
         <tbody>
           {deletedRows.map((p: any) => (
             <tr key={p.id}>
-              <td><strong>{p.name}</strong>{p.category && <div className="small muted">{p.category}</div>}</td>
+              <td><strong>{p.name.replace(/ \(deleted [0-9a-f]{6}\)$/, '')}</strong>{p.category && <div className="small muted">{p.category}</div>}</td>
               <td className="num">{money(p.sale_price)}</td>
               <td className="small">{fmtTime(p.deleted_at)}</td>
               <td style={{ textAlign: 'right' }}>{can('catalog') && <button type="button" className="btn btn-ghost btn-xs" disabled={restoring} onClick={() => restore(p)}><RotateCcw size={13} /> Restore</button>}</td>

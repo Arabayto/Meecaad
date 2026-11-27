@@ -944,6 +944,24 @@ try {
     assert.equal((await owner.call('POST', '/sales', { business: 'store', items: [{ product: sold, qty: 1 }], payments: [] , customer })).status, 400, 'cannot be sold');
     assert.equal((await owner.call('POST', '/purchases', { business: 'store', items: [{ product: sold, qty: 1, total: 100 }], paid: 100, method: 'cash' })).status, 400, 'cannot be bought');
     assert.equal(await stockValue(), value0, 'no stock value left behind');
+    // A deleted product with history keeps its name in the books, but the name can be used again:
+    // by hand, by bulk upload, or by renaming; the deleted one becomes "… (deleted xxxxxx)".
+    const again = (await owner.post('/products', { business: 'store', name: 'Old stock', kind: 'item', salePrice: 600, openingCost: 400, openingQty: 2 })).id;
+    const deletedNow = await owner.get('/products?business=store&deleted=1');
+    const oldOne = deletedNow.find((p) => p.id === sold);
+    assert.match(oldOne.name, /^Old stock \(deleted [0-9a-f]{6}\)$/, 'the deleted one gives the name up');
+    assert.equal((await owner.get(`/sales/${sale.id}`)).items[0].name, 'Old stock', 'its past sale still reads "Old stock"');
+    const bulkAgain = await owner.post('/products/bulk', { business: 'store', rows: [{ name: 'Wrong item', cost: 100, price: 150, qty: 0 }, { name: 'Brand new', cost: 1, price: 2, qty: 0 }] });
+    assert.equal(bulkAgain.count, 2, 'bulk upload reuses a deleted name');
+    await owner.post(`/products/${sold}/restore`, {});
+    assert.match((await owner.get('/products?business=store')).find((p) => p.id === sold).name, /\(deleted [0-9a-f]{6}\)$/, 'restored while its name is taken: keeps the mark');
+    await owner.post(`/products/${again}/delete`, { stock: 'mistake' });
+    await owner.post(`/products/${sold}/delete`, {});
+    await owner.post(`/products/${sold}/restore`, {});
+    const backAgain = (await owner.get('/products?business=store')).find((p) => p.id === sold);
+    assert.equal(backAgain.name, 'Old stock', 'restored when the name is free again: its own name back');
+    await owner.post(`/products/${sold}/delete`, {});
+    for (const n of ['Wrong item', 'Brand new']) { const x = (await owner.get('/products?business=store')).find((p) => p.name === n); await owner.post(`/products/${x.id}/delete`, {}); }
     // A cashier cannot delete or upload.
     await owner.post('/users', { fullName: 'Crud Till', username: 'crudtill', password: 'crud-till-55', access: { store: 'cashier' } });
     const ct = client(); await ct.post('/auth/login', { username: 'crudtill', password: 'crud-till-55' });

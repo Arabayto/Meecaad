@@ -340,6 +340,7 @@ export class Tx {
       if (msg.includes('UNIQUE constraint failed: sales.business_id') || msg.includes('UNIQUE constraint failed: purchases.business_id')) {
         throw new HttpError(409, 'Another transaction was saved at the same moment. Please try again.');
       }
+      if (msg.includes('UNIQUE constraint failed: products.business_id, products.name')) throw new HttpError(409, 'A product with this name already exists');
       if (msg.includes('UNIQUE constraint failed')) throw new HttpError(409, 'This record already exists');
       throw err;
     }

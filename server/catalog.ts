@@ -40,6 +40,7 @@ export async function createProduct(ctx: Ctx) {
   await assertNameFree(ctx, business, name);
   const date = entryDate(b.date);
   const tx = new Tx(ctx.db, ctx.user);
+  await freeDeletedNames(ctx, tx, business, [name]);
   tx.run(`INSERT INTO products (id, business_id, name, category, kind, unit, sku, sale_price, avg_cost, track_stock, reorder_level, created_at, created_by)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, business, name, str(b.category, 'Category', { max: 60 }) ?? '', kind, str(b.unit, 'Unit', { max: 20 }) ?? (kind === 'fuel' ? 'L' : 'pcs'),
@@ -56,6 +57,22 @@ export async function createProduct(ctx: Ctx) {
 }
 
 /** Two products with the same name in one business would be confused at the till. */
+/**
+ * The database keeps one product per name (deleted ones too: they stay in the history under their
+ * name). A new or renamed product may reuse the name of a deleted one: in the same save the deleted
+ * one becomes "Name (deleted 1a2b3c)", which is how it then shows in its history and in Deleted.
+ */
+const DELETED_SUFFIX = / \(deleted [0-9a-f]{6}\)$/;
+async function freeDeletedNames(ctx: Ctx, tx: Tx, business: string, names: string[]) {
+  const wanted = [...new Set(names.map((n) => n.trim().toLowerCase()))];
+  for (let i = 0; i < wanted.length; i += 90) {
+    const part = wanted.slice(i, i + 90);
+    const rows = await all<{ id: string; name: string }>(ctx.db, `SELECT id, name FROM products WHERE business_id = ? AND deleted_at IS NOT NULL
+      AND LOWER(TRIM(name)) IN (${placeholders(part)})`, business, ...part);
+    for (const r of rows) tx.run('UPDATE products SET name = ? WHERE id = ?', `${r.name.slice(0, 100)} (deleted ${r.id.replace(/-/g, '').slice(0, 6).toLowerCase()})`, r.id);
+  }
+}
+
 async function assertNameFree(ctx: Ctx, business: string, name: string, except = '') {
   const same = await first<any>(ctx.db, `SELECT id FROM products WHERE business_id = ? AND deleted_at IS NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id <> ?`, business, name, except);
   if (same) throw new HttpError(409, `“${name}” already exists`);
@@ -90,6 +107,7 @@ export async function bulkCreateProducts(ctx: Ctx) {
     };
   });
   const tx = new Tx(ctx.db, ctx.user);
+  await freeDeletedNames(ctx, tx, business, items.map((i) => i.name));
   const batch = newId();
   let total = 0;
   for (const it of items) {
@@ -187,11 +205,18 @@ export async function deleteProduct(ctx: Ctx) {
 export async function restoreProduct(ctx: Ctx) {
   const p = await productFor(ctx);
   if (!p.deleted_at) throw new HttpError(409, 'This product is not deleted');
-  await assertNameFree(ctx, p.business_id, p.name, p.id);
+  // Back under its own name when that name is free again; otherwise it keeps "(deleted …)" (rename it after).
+  let name = p.name;
+  const base = p.name.replace(DELETED_SUFFIX, '');
   const tx = new Tx(ctx.db, ctx.user);
-  tx.run('UPDATE products SET deleted_at = NULL, deleted_by = NULL, active = 1 WHERE id = ?', p.id);
-  tx.audit('restore', 'product', p.id, p.business_id, { name: p.name });
-  return tx.commit(null, { id: p.id });
+  if (base !== p.name) {
+    // Only a product still in use keeps the name; a deleted one holding it gives it up.
+    const live = await first<any>(ctx.db, `SELECT id FROM products WHERE business_id = ? AND id <> ? AND deleted_at IS NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?))`, p.business_id, p.id, base);
+    if (!live) { await freeDeletedNames(ctx, tx, p.business_id, [base]); name = base; }
+  } else await assertNameFree(ctx, p.business_id, p.name, p.id);
+  tx.run('UPDATE products SET name = ?, deleted_at = NULL, deleted_by = NULL, active = 1 WHERE id = ?', name, p.id);
+  tx.audit('restore', 'product', p.id, p.business_id, { name });
+  return tx.commit(null, { id: p.id, name });
 }
 
 export async function updateProduct(ctx: Ctx) {
@@ -203,6 +228,7 @@ export async function updateProduct(ctx: Ctx) {
   if (b.name !== undefined && String(b.name).trim().toLowerCase() !== String(p.name).trim().toLowerCase()) await assertNameFree(ctx, p.business_id, String(b.name), p.id);
   const price = b.salePrice === undefined ? p.sale_price : cents(b.salePrice, 'Selling price');
   const tx = new Tx(ctx.db, ctx.user);
+  if (b.name !== undefined && String(b.name).trim() !== p.name) await freeDeletedNames(ctx, tx, p.business_id, [String(b.name)]);
   tx.run(`UPDATE products SET name = ?, category = ?, unit = ?, sku = ?, sale_price = ?, reorder_level = ?, active = ? WHERE id = ?`,
     str(b.name ?? p.name, 'Name', { required: true, max: 120 }), str(b.category ?? p.category, 'Category', { max: 60 }) ?? '',
     str(b.unit ?? p.unit, 'Unit', { max: 20 }) ?? p.unit, str(b.sku ?? p.sku, 'Barcode/SKU', { max: 60 }), price,
